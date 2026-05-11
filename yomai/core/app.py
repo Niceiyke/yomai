@@ -22,6 +22,7 @@ from yomai.llm.openai import OpenAIProvider
 from yomai.memory import DictMemory, MemoryBackend, SqliteMemory
 from yomai.middleware.errors import ErrorMiddleware
 from yomai.middleware.logging import LoggingMiddleware
+from yomai.openapi.schema import build_openapi
 from yomai.tools.registry import ToolFunction
 
 
@@ -51,6 +52,11 @@ class Yomai:
                 Route("/__yomai__", self._playground, methods=["GET"]),
                 Route("/__yomai__/health", self._health, methods=["GET"]),
                 Route("/__yomai__/routes", self._routes, methods=["GET"]),
+                Route(
+                    "/__yomai__/openapi.json",
+                    self._openapi,
+                    methods=["GET"],
+                ),
             ]
         )
         self._starlette.add_middleware(LoggingMiddleware, enabled=self.config.dev.log_usage)
@@ -74,6 +80,12 @@ class Yomai:
 
     async def _routes(self, request: Request) -> JSONResponse:
         return JSONResponse(self._routes_meta)
+
+    async def _openapi(self, request: Request) -> JSONResponse:
+        title = os.environ.get("YOMAI_APP_TITLE", "Yomai Agent API")
+        api_key = self.config.dev.api_key
+        schema = build_openapi(self._routes_meta, title=title, api_key=api_key)
+        return JSONResponse(schema)
 
     def agent(
         self,
@@ -99,6 +111,7 @@ class Yomai:
                 self._accepting_connections,
                 self.config.dev.log_usage,
                 system,
+                self.config.dev.api_key,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
@@ -140,6 +153,7 @@ class Yomai:
                 self._stream_finished,
                 self._accepting_connections,
                 self.config.dev.log_usage,
+                self.config.dev.api_key,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)

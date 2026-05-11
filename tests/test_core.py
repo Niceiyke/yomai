@@ -232,3 +232,63 @@ async def test_sqlite_memory_persists_across_instances() -> None:
     finally:
         if os.path.exists(db):
             os.unlink(db)
+
+@pytest.mark.asyncio
+async def test_openapi_schema_generated() -> None:
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+    @app.agent("/chat")
+    async def chat(message: str) -> None:
+        pass
+    @app.workflow("/research")
+    async def research(topic: str, runner=None) -> str:
+        return topic
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/__yomai__/openapi.json")
+    schema = resp.json()
+    assert schema["openapi"] == "3.1.0"
+    assert "/chat" in schema["paths"]
+    assert schema["paths"]["/chat"]["post"]["x-yomai-type"] == "agent"
+    assert "/research" in schema["paths"]
+    assert schema["paths"]["/research"]["post"]["x-yomai-type"] == "workflow"
+    assert "components" in schema
+    assert "securitySchemes" in schema["components"]
+
+
+@pytest.mark.asyncio
+async def test_openapi_schema_security_when_api_key_set() -> None:
+    from yomai.config import DevConfig
+    app = Yomai(
+        llm=LLMConfig(api_key=""),
+        memory=MemoryConfig(backend="dict", db_path="/unused"),
+        dev=DevConfig(api_key="my-key"),
+    )
+    @app.agent("/secure")
+    async def chat(msg: str) -> None:
+        pass
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/__yomai__/openapi.json")
+    schema = resp.json()
+    post = schema["paths"]["/secure"]["post"]
+    assert post["security"] == [{"ApiKeyAuth": []}]
+
+
+@pytest.mark.asyncio
+async def test_api_key_auth_on_agent() -> None:
+    from yomai.config import DevConfig
+    app = Yomai(
+        llm=LLMConfig(api_key=""),
+        memory=MemoryConfig(backend="dict", db_path="/unused"),
+        dev=DevConfig(api_key="secret"),
+    )
+    @app.agent("/auth-chat")
+    async def chat(message: str) -> None:
+        pass
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r1 = await client.post("/auth-chat", json={"message": "hi"})
+        assert r1.status_code == 401
+        r2 = await client.post("/auth-chat", json={"message": "hi"}, headers={"Authorization": "Bearer secret"})
+        assert r2.status_code != 401
+

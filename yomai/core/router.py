@@ -47,6 +47,7 @@ class AgentRoute:
         should_accept: AcceptCallback | None = None,
         log_usage: bool = True,
         system: str = "",
+        required_api_key: str = "",
     ) -> None:
         self.path = path
         self.handler = handler
@@ -61,10 +62,16 @@ class AgentRoute:
         self.should_accept = should_accept
         self.log_usage = log_usage
         self.system = system
+        self.required_api_key = required_api_key
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
         if self.should_accept is not None and not self.should_accept():
             return JSONResponse({"error": "Server is shutting down"}, status_code=503)
+        if self.required_api_key:
+            auth = request.headers.get("Authorization", "")
+            expected = f"Bearer {self.required_api_key}"
+            if auth != expected:
+                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
         try:
             body: Any = await request.json()
         except Exception:
@@ -151,6 +158,7 @@ class WorkflowRoute:
         on_stream_end: LifecycleCallback | None = None,
         should_accept: AcceptCallback | None = None,
         log_usage: bool = True,
+        required_api_key: str = "",
     ) -> None:
         self.path = path
         self.handler = handler
@@ -160,10 +168,16 @@ class WorkflowRoute:
         self.on_stream_end = on_stream_end
         self.should_accept = should_accept
         self.log_usage = log_usage
+        self.required_api_key = required_api_key
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
         if self.should_accept is not None and not self.should_accept():
             return JSONResponse({"error": "Server is shutting down"}, status_code=503)
+        if self.required_api_key:
+            auth = request.headers.get("Authorization", "")
+            expected = f"Bearer {self.required_api_key}"
+            if auth != expected:
+                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
         try:
             body: Any = await request.json()
         except Exception:

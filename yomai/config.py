@@ -52,6 +52,7 @@ class DevConfig(BaseModel):
     ui: bool = True
     log_usage: bool = True
     reload: bool = True
+    api_key: str = Field(default_factory=lambda: os.environ.get("YOMAI_API_KEY", ""))
 
 
 class Config(BaseModel):
