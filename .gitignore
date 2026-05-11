@@ -1,0 +1,15 @@
+# Secrets
+llm.md
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pyright/
+.venv/
+dist/
+build/
+*.egg-info/
