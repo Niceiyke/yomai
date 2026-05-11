@@ -46,6 +46,7 @@ class AgentRoute:
         on_stream_end: LifecycleCallback | None = None,
         should_accept: AcceptCallback | None = None,
         log_usage: bool = True,
+        system: str = "",
     ) -> None:
         self.path = path
         self.handler = handler
@@ -59,6 +60,7 @@ class AgentRoute:
         self.on_stream_end = on_stream_end
         self.should_accept = should_accept
         self.log_usage = log_usage
+        self.system = system
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
         if self.should_accept is not None and not self.should_accept():
@@ -89,7 +91,7 @@ class AgentRoute:
             try:
                 history = await self.memory.load(session_id)
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config)
-                async for sse in agent_loop.run(message, history=history, system=""):
+                async for sse in agent_loop.run(message, history=history, system=self.system):
                     await put_sse(sse)
                 completed = True
             except asyncio.CancelledError:

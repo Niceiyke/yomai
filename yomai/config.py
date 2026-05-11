@@ -17,20 +17,22 @@ class LLMConfig(BaseModel):
     cost_per_token: dict[str, float] = Field(
         default_factory=lambda: {"input": 0.000003, "output": 0.000015}
     )
+    strip_reasoning: bool = False
 
 
 class MemoryConfig(BaseModel):
-    backend: str = "dict"
+    backend: Literal["dict", "sqlite"] = "sqlite"
     ttl_hours: int = 24
     max_messages: int = 20
+    db_path: str = "yomai_sessions.db"
 
     @field_validator("backend")
     @classmethod
     def validate_backend(cls, value: str) -> str:
-        if value != "dict":
+        if value not in ("dict", "sqlite"):
             raise YomaiConfigError(
                 f"Memory backend {value!r} is not available in V1.",
-                hint="Redis backend ships in V2.",
+                hint="Valid options: 'dict', 'sqlite'.",
                 docs="https://yomai.dev/roadmap",
             )
         return value

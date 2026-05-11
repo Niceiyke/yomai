@@ -19,7 +19,7 @@ from yomai.exceptions import YomaiConfigError, YomaiRouteError
 from yomai.llm import LLMProvider
 from yomai.llm.anthropic import AnthropicProvider
 from yomai.llm.openai import OpenAIProvider
-from yomai.memory import DictMemory, MemoryBackend
+from yomai.memory import DictMemory, MemoryBackend, SqliteMemory
 from yomai.middleware.errors import ErrorMiddleware
 from yomai.middleware.logging import LoggingMiddleware
 from yomai.tools.registry import ToolFunction
@@ -41,7 +41,7 @@ class Yomai:
             streaming=streaming or StreamingConfig(),
             dev=dev or DevConfig(),
         )
-        self.memory: MemoryBackend = DictMemory(max_messages=self.config.memory.max_messages)
+        self.memory: MemoryBackend = self._build_memory(self.config.memory)
         self._active_connections = 0
         self._draining = False
         self._routes_meta: list[dict[str, Any]] = []
@@ -57,6 +57,13 @@ class Yomai:
         self._starlette.add_middleware(ErrorMiddleware)
         self._setup_signal_handlers()
 
+    def _build_memory(self, cfg: MemoryConfig) -> MemoryBackend:
+        if cfg.backend == "dict":
+            return DictMemory(max_messages=cfg.max_messages)
+        if cfg.backend == "sqlite":
+            return SqliteMemory(db_path=cfg.db_path, max_messages=cfg.max_messages)
+        raise YomaiConfigError(f"Unknown memory backend: {cfg.backend!r}")
+
     async def _playground(self, request: Request) -> Response:
         if os.environ.get("YOMAI_ENV") == "production" or not self.config.dev.ui:
             return Response(status_code=404)
@@ -68,7 +75,13 @@ class Yomai:
     async def _routes(self, request: Request) -> JSONResponse:
         return JSONResponse(self._routes_meta)
 
-    def agent(self, path: str, tools: list[ToolFunction] | None = None) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    def agent(
+        self,
+        path: str,
+        tools: list[ToolFunction] | None = None,
+        *,
+        system: str = "",
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         self._validate_new_path(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
@@ -85,6 +98,7 @@ class Yomai:
                 self._stream_finished,
                 self._accepting_connections,
                 self.config.dev.log_usage,
+                system,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
@@ -97,6 +111,7 @@ class Yomai:
                     "params": self._route_params(fn, injected={"session_id"}),
                     "body_params": ["message"],
                     "injected_params": ["session_id"],
+                    "system": system or None,
                 }
             )
             setattr(fn, "_yomai_app", self)

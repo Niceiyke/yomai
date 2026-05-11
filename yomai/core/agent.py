@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import inspect
+import re
 import time
 from collections.abc import AsyncGenerator
 from typing import Any, Protocol, cast
@@ -35,6 +36,7 @@ class AgentLoop:
         self.llm_config = llm_config
         self.last_reply: str = ""
         self.last_usage: Done = Done()
+        self.strip_reasoning = llm_config.strip_reasoning if llm_config else False
 
     def _tool_schemas(self) -> list[ToolSchema]:
         if hasattr(self.provider, "tool_schemas"):
@@ -61,8 +63,9 @@ class AgentLoop:
 
             async for event in self.provider.stream(messages, tool_schemas, system):
                 if isinstance(event, TextChunk):
-                    self.last_reply += event.content
-                    yield await sse_chunk(event.content)
+                    content = self._maybe_strip_reasoning(event.content)
+                    self.last_reply += content
+                    yield await sse_chunk(content)
                 elif isinstance(event, ToolCall):
                     if iterations >= self.config.max_tool_calls:
                         yield await sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
@@ -82,6 +85,11 @@ class AgentLoop:
 
         yield await sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
         yield await sse_done()
+
+    def _maybe_strip_reasoning(self, text: str) -> str:
+        if not self.strip_reasoning:
+            return text
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
 
     async def _execute_tool_call(self, tool_call: ToolCall, messages: list[Message]) -> AsyncGenerator[str, None]:
         """Execute a tool immediately and stream tool_start/tool_end as soon as the call is observed."""
