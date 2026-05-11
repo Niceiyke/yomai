@@ -49,7 +49,9 @@ class Yomai:
         self._paths: set[str] = set()
         self._starlette = Starlette(
             routes=[
+                Route("/dev", self._playground, methods=["GET"]),
                 Route("/__yomai__", self._playground, methods=["GET"]),
+                Route("/__yomai__/", self._playground, methods=["GET"]),
                 Route("/__yomai__/health", self._health, methods=["GET"]),
                 Route("/__yomai__/routes", self._routes, methods=["GET"]),
                 Route(

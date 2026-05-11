@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 
-PLAYGROUND_HTML = """<!DOCTYPE html>
+PLAYGROUND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -29,7 +29,7 @@ function newSession(){ sessionId=crypto.randomUUID(); $('sid').textContent=sessi
 function clearChat(){ $('messages').innerHTML=''; $('tools').innerHTML=''; $('events').innerHTML=''; $('usage').textContent='No usage yet'; currentAssistant=null; }
 function bubble(text, cls){ const d=document.createElement('div'); d.className=`bubble ${cls}`; d.textContent=text; $('messages').appendChild(d); $('messages').scrollTop=$('messages').scrollHeight; return d; }
 function logEvent(ev,data){ const d=document.createElement('div'); d.className='event'; d.textContent=ev+' '+JSON.stringify(data,null,2); $('events').prepend(d); }
-function handle(ev,data){ logEvent(ev,data); if(ev==='chunk'){ if(!currentAssistant) currentAssistant=bubble('', 'assistant'); currentAssistant.textContent += data.content; } else if(ev==='result'){ bubble(data.content,'assistant'); } else if(ev==='step_start'){ bubble(`▶ step ${data.index}: ${data.name}`,'assistant'); } else if(ev==='step_done'){ bubble(`✓ ${data.name} (${data.duration_ms}ms)`,'assistant'); } else if(ev==='tool_start'){ const d=document.createElement('div'); d.className='tool'; d.id='tool-'+data.id; d.textContent=`${data.name} ${JSON.stringify(data.args)}`; $('tools').prepend(d); } else if(ev==='tool_end'){ const d=$('tool-'+data.id); if(d) d.textContent += ` → ${data.result} (${data.duration_ms}ms)`; } else if(ev==='usage'){ $('usage').textContent=`${data.input_tokens}→${data.output_tokens} tokens · ~$${Number(data.cost_usd).toFixed(6)}`; } else if(ev==='error'){ bubble('Error: '+data.message,'assistant'); } else if(ev==='done'){ currentAssistant=null; } }
+function handle(ev,data){ logEvent(ev,data); if(ev==='chunk'){ if(!currentAssistant) currentAssistant=bubble('', 'assistant'); currentAssistant.textContent += data.content; } else if(ev==='result'){ bubble(data.content,'assistant'); } else if(ev==='step_start'){ bubble(`\u25b6 step ${data.index}: ${data.name}`,'assistant'); } else if(ev==='step_done'){ bubble(`\u2713 ${data.name} (${data.duration_ms}ms)`,'assistant'); } else if(ev==='tool_start'){ const d=document.createElement('div'); d.className='tool'; d.id='tool-'+data.id; d.textContent=`${data.name} ${JSON.stringify(data.args)}`; $('tools').prepend(d); } else if(ev==='tool_end'){ const d=$('tool-'+data.id); if(d) d.textContent += ` \u2192 ${data.result} (${data.duration_ms}ms)`; } else if(ev==='usage'){ $('usage').textContent=`${data.input_tokens}\u2192${data.output_tokens} tokens \u00b7 ~$${Number(data.cost_usd).toFixed(6)}`; } else if(ev==='error'){ bubble('Error: '+data.message,'assistant'); } else if(ev==='done'){ currentAssistant=null; } }
 function parse(buf){ const parts=buf.split('\n\n'); for(let i=0;i<parts.length-1;i++){ let ev='message', data='{}'; for(const line of parts[i].split('\n')){ if(line.startsWith('event:')) ev=line.slice(6).trim(); if(line.startsWith('data:')) data=line.slice(5).trim(); } if(ev!=='ping') handle(ev, JSON.parse(data||'{}')); } return parts[parts.length-1]; }
 function requestBody(route,msg){ if(route.type!=='workflow') return {message:msg}; const body={}; (route.params||[]).forEach((p,idx)=>{ const el=$('field-'+p.name); const value=el?el.value.trim():''; if(value) body[p.name]=value; else if(idx===0) body[p.name]=msg; else if(p.default!==undefined && p.default!==null) body[p.name]=p.default; }); return body; }
 async function sendMessage(){ const msg=$('input').value.trim(); if(!msg)return; $('input').value=''; bubble(msg,'user'); currentAssistant=null; const route=selectedRoute(); const body=requestBody(route,msg); const res=await fetch(route.path,{method:'POST',headers:{'Content-Type':'application/json','X-Session-Id':sessionId},body:JSON.stringify(body)}); if(!res.ok){ bubble(`HTTP ${res.status}: ${await res.text()}`,'assistant'); return; } const reader=res.body.getReader(); const dec=new TextDecoder(); let buf=''; while(true){ const {done,value}=await reader.read(); if(done)break; buf=parse(buf+dec.decode(value,{stream:true})); } }
@@ -40,4 +40,5 @@ init();
 
 
 def get_playground_html(routes: list[dict[str, Any]]) -> str:
-    return PLAYGROUND_HTML.replace("__ROUTES__", json.dumps(routes))
+    routes_json = json.dumps(routes, ensure_ascii=False)
+    return PLAYGROUND_HTML.replace("__ROUTES__", routes_json)
