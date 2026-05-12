@@ -65,7 +65,8 @@ class WorkflowRunner:
         typed_tools: list[ToolFunction] = tools
 
         history = await self.memory.load(self.session_id)
-        agent_loop = AgentLoop(self.app._build_provider(), typed_tools, self.app.config.agent, self.app.config.llm)
+        agent_loop = AgentLoop(self.app._build_provider(), typed_tools, self.app.config.agent, self.app.config.llm,
+            budget_tracker=self.app.budget, session_id=self.session_id)
 
         try:
             async for sse in agent_loop.run(str(input), history=history, system=""):

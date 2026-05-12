@@ -175,6 +175,7 @@ class AgentRoute(BaseRoute):
         self.provider_factory = provider_factory
         self.heartbeat_secs = heartbeat_secs
         self.system = system
+        self._budget_tracker: Any = None
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
         auth_error = await self._check_auth(request)
@@ -216,7 +217,8 @@ class AgentRoute(BaseRoute):
                 if inspect.isawaitable(result):
                     await result
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
-                agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config)
+                agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
+                    budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id)
                 async for sse in agent_loop.run(message, history=history, system=self.system):
                     await put_sse(sse)
                 completed = True

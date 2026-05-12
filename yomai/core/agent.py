@@ -5,7 +5,10 @@ import functools
 import inspect
 import time
 from collections.abc import AsyncGenerator
-from typing import Any, Protocol, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args, get_origin
+
+if TYPE_CHECKING:
+    from yomai.budget import BudgetTracker
 
 from yomai.config import AgentConfig, LLMConfig
 from yomai.llm.base import Done, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
@@ -28,11 +31,16 @@ class AgentLoop:
         tools: list[ToolFunction],
         config: AgentConfig,
         llm_config: LLMConfig | None = None,
+        *,
+        budget_tracker: BudgetTracker | None = None,
+        session_id: str = "",
     ) -> None:
         self.provider = provider
         self.tools = tools
         self.config = config
         self.llm_config = llm_config
+        self.budget_tracker = budget_tracker
+        self.session_id = session_id
         self.last_reply: str = ""
         self.last_usage: Done = Done()
         self.strip_reasoning = llm_config.strip_reasoning if llm_config else False
@@ -79,6 +87,21 @@ class AgentLoop:
                     usage.input_tokens += event.input_tokens
                     usage.output_tokens += event.output_tokens
                     self.last_usage = Done(usage.input_tokens, usage.output_tokens)
+
+                    # Budget check
+                    if self.budget_tracker and self.session_id:
+                        result = self.budget_tracker.check(
+                            self.session_id,
+                            event.input_tokens,
+                            event.output_tokens,
+                            self._estimate_cost(event),
+                        )
+                        if result["exceeded"]:
+                            msg = f"Budget exceeded: {result.get('reason', 'limit')}"
+                            yield sse_error(msg, "budget_exceeded")
+                            yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
+                            yield sse_done()
+                            return
 
             if not saw_tool_call:
                 break

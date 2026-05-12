@@ -23,6 +23,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 from yomai import env
 from yomai._types import Request, read_json_body
 from yomai.auth import AuthBackend, NoAuth
+from yomai.budget import BudgetTracker
 from yomai.config import (
     AgentConfig,
     BudgetConfig,
@@ -236,6 +237,7 @@ class Yomai:
         )
         _setup_logging()
         self._auth = auth or NoAuth()
+        self.budget = BudgetTracker(self.config.budgets)
         self.memory: MemoryBackend = self._build_memory(self.config.memory)
         self.jobs = self._build_job_store()
         self.job_events = self._build_job_event_store()
@@ -698,6 +700,7 @@ class Yomai:
                 dependencies or [],
                 auth=self._auth,
             )
+            route._budget_tracker = self.budget
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
@@ -1277,11 +1280,12 @@ class Yomai:
         }.get(annotation, "string")
 
     def _build_provider(self) -> LLMProvider:
-        if self.config.llm.provider == "anthropic":
+        provider = self.config.llm.provider
+        if provider == "anthropic":
             return AnthropicProvider(self.config.llm)
-        if self.config.llm.provider == "openai":
+        if provider in ("openai", "ollama"):
             return OpenAIProvider(self.config.llm)
-        raise YomaiConfigError(f"Unknown provider: {self.config.llm.provider!r}")
+        raise YomaiConfigError(f"Unknown provider: {provider!r}")
 
     def _accepting_connections(self) -> bool:
         return not self._draining

@@ -9,7 +9,7 @@ from yomai.exceptions import YomaiConfigError
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["anthropic", "openai"] = "anthropic"
+    provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     api_key: str = ""
     base_url: str | None = None
@@ -32,6 +32,11 @@ class LLMConfig(BaseModel):
             self.base_url = getattr(env, env_url, None)
         if self.provider == "openai" and self.model == "claude-sonnet-4-20250514":
             self.model = "gpt-4o-mini"
+        if self.provider == "ollama":
+            if self.model == "claude-sonnet-4-20250514":
+                self.model = "llama3.2"
+            if self.base_url is None:
+                self.base_url = getattr(env, "OLLAMA_BASE_URL", None) or "http://localhost:11434/v1"
         return self
 
 
