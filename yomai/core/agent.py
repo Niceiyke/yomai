@@ -122,16 +122,36 @@ class AgentLoop:
             result = f"Error: Unknown tool {tool_call.name!r}"
             yield sse_error(result, "unknown_tool")
         else:
-            try:
-                signature = inspect.signature(fn)
-                bound = signature.bind(**tool_call.args)
-                self._validate_tool_args(fn, bound.arguments)
-                if inspect.iscoroutinefunction(fn):
-                    result = await fn(**tool_call.args)
-                else:
-                    result = await asyncio.to_thread(functools.partial(fn, **tool_call.args))
-            except Exception as exc:
-                result = f"Error: {exc}"
+            timeout = getattr(fn, "_tool_timeout_secs", None)
+            max_retries = getattr(fn, "_tool_max_retries", 0)
+
+            for attempt in range(max_retries + 1):
+                try:
+                    signature = inspect.signature(fn)
+                    bound = signature.bind(**tool_call.args)
+                    self._validate_tool_args(fn, bound.arguments)
+                    if inspect.iscoroutinefunction(fn):
+                        if timeout:
+                            result = await asyncio.wait_for(fn(**tool_call.args), timeout=timeout)
+                        else:
+                            result = await fn(**tool_call.args)
+                    else:
+                        if timeout:
+                            result = await asyncio.wait_for(
+                                asyncio.to_thread(functools.partial(fn, **tool_call.args)),
+                                timeout=timeout,
+                            )
+                        else:
+                            result = await asyncio.to_thread(functools.partial(fn, **tool_call.args))
+                    break  # Success
+                except asyncio.TimeoutError:
+                    result = f"Error: Tool {tool_call.name!r} timed out after {timeout}s"
+                    if attempt < max_retries:
+                        continue
+                except Exception as exc:
+                    result = f"Error: {exc}"
+                    if attempt < max_retries:
+                        continue
 
         duration_ms = int((time.monotonic() - start) * 1000)
         result_str = str(result)

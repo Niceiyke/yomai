@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from typing import Any
 
 from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
+from yomai.llm._retry import _is_transient
 from yomai.llm.base import Done, LLMEvent, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
 from yomai.tools.registry import ToolFunction, _registry
 
@@ -24,6 +26,7 @@ class AnthropicProvider(LLMProvider):
                 docs="https://yomai.dev/config#api-key",
             )
         self._anthropic: Any = anthropic
+        self.config = config
         client_kwargs: dict[str, Any] = {"api_key": config.api_key}
         if config.base_url:
             client_kwargs["base_url"] = config.base_url
@@ -59,60 +62,79 @@ class AnthropicProvider(LLMProvider):
         if tools:
             kwargs["tools"] = tools
 
-        input_tokens = 0
-        output_tokens = 0
-        current_tool: dict[str, Any] | None = None
+        max_retries = self.config.max_retries
+        backoff = self.config.retry_backoff_secs
+        multiplier = self.config.retry_backoff_multiplier
+        last_exc: BaseException | None = None
 
-        try:
-            async with self.client.messages.stream(**kwargs) as stream:
-                async for event in stream:
-                    etype = getattr(event, "type", "")
+        for attempt in range(max_retries + 1):
+            input_tokens = 0
+            output_tokens = 0
+            current_tool: dict[str, Any] | None = None
 
-                    if etype == "content_block_start":
-                        block = getattr(event, "content_block", None)
-                        if getattr(block, "type", None) == "tool_use":
-                            current_tool = {
-                                "id": getattr(block, "id", ""),
-                                "name": getattr(block, "name", ""),
-                                "args": getattr(block, "input", {}) or {},
-                                "json": "",
-                            }
+            try:
+                async with self.client.messages.stream(**kwargs) as stream:
+                    async for event in stream:
+                        etype = getattr(event, "type", "")
 
-                    elif etype == "content_block_delta":
-                        delta = getattr(event, "delta", None)
-                        if getattr(delta, "type", None) == "text_delta":
-                            text = getattr(delta, "text", "")
-                            if text:
-                                yield TextChunk(text)
-                        elif getattr(delta, "type", None) == "input_json_delta" and current_tool is not None:
-                            current_tool["json"] += getattr(delta, "partial_json", "") or ""
+                        if etype == "content_block_start":
+                            block = getattr(event, "content_block", None)
+                            if getattr(block, "type", None) == "tool_use":
+                                current_tool = {
+                                    "id": getattr(block, "id", ""),
+                                    "name": getattr(block, "name", ""),
+                                    "args": getattr(block, "input", {}) or {},
+                                    "json": "",
+                                }
 
-                    elif etype == "content_block_stop" and current_tool:
-                        args = current_tool["args"]
-                        if current_tool.get("json"):
-                            try:
-                                args = json.loads(str(current_tool["json"]))
-                            except json.JSONDecodeError:
-                                args = current_tool["args"]
-                        yield ToolCall(
-                            id=str(current_tool["id"]),
-                            name=str(current_tool["name"]),
-                            args=dict(args),
-                        )
-                        current_tool = None
+                        elif etype == "content_block_delta":
+                            delta = getattr(event, "delta", None)
+                            if getattr(delta, "type", None) == "text_delta":
+                                text = getattr(delta, "text", "")
+                                if text:
+                                    yield TextChunk(text)
+                            elif getattr(delta, "type", None) == "input_json_delta" and current_tool is not None:
+                                current_tool["json"] += getattr(delta, "partial_json", "") or ""
 
-                    elif etype == "message_delta":
-                        usage = getattr(event, "usage", None)
-                        if usage:
-                            output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
+                        elif etype == "content_block_stop" and current_tool:
+                            args = current_tool["args"]
+                            if current_tool.get("json"):
+                                try:
+                                    args = json.loads(str(current_tool["json"]))
+                                except json.JSONDecodeError:
+                                    args = current_tool["args"]
+                            yield ToolCall(
+                                id=str(current_tool["id"]),
+                                name=str(current_tool["name"]),
+                                args=dict(args),
+                            )
+                            current_tool = None
 
-                final = await stream.get_final_message()
-                usage = getattr(final, "usage", None)
-                if usage:
-                    input_tokens = getattr(usage, "input_tokens", 0) or 0
-                    output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
-                yield Done(input_tokens=input_tokens, output_tokens=output_tokens)
-        except (self._anthropic.RateLimitError, self._anthropic.AuthenticationError) as exc:
-            raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#anthropic") from exc
-        except Exception as exc:
-            raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#anthropic") from exc
+                        elif etype == "message_delta":
+                            usage = getattr(event, "usage", None)
+                            if usage:
+                                output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
+
+                    final = await stream.get_final_message()
+                    usage = getattr(final, "usage", None)
+                    if usage:
+                        input_tokens = getattr(usage, "input_tokens", 0) or 0
+                        output_tokens = getattr(usage, "output_tokens", output_tokens) or output_tokens
+                    yield Done(input_tokens=input_tokens, output_tokens=output_tokens)
+                    return  # Success — exit retry loop
+
+            except (self._anthropic.RateLimitError, self._anthropic.AuthenticationError) as exc:
+                if isinstance(exc, self._anthropic.AuthenticationError) or not _is_transient(exc):
+                    raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#anthropic") from exc
+                last_exc = exc
+            except Exception as exc:
+                if not _is_transient(exc) or attempt >= max_retries:
+                    raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#anthropic") from exc
+                last_exc = exc
+
+            if attempt < max_retries:
+                delay = backoff * (multiplier ** attempt)
+                await asyncio.sleep(delay)
+
+        if last_exc is not None:
+            raise YomaiLLMError(str(last_exc), docs="https://yomai.dev/llm#anthropic") from last_exc

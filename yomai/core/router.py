@@ -231,6 +231,7 @@ class AgentRoute(BaseRoute):
             agent_task = asyncio.create_task(run_agent())
             heartbeat_task = asyncio.create_task(heartbeat(queue, self.heartbeat_secs))
             started_at = time.monotonic()
+            seq = 0
             if self.on_stream_start is not None:
                 self.on_stream_start()
             try:
@@ -240,7 +241,8 @@ class AgentRoute(BaseRoute):
                         timeout_sse = sse_error("Agent request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
-                        yield timeout_sse
+                        seq += 1
+                        yield f"id: {seq}\n{timeout_sse}"
                         break
                     if await request.is_disconnected():
                         agent_task.cancel()
@@ -251,7 +253,8 @@ class AgentRoute(BaseRoute):
                         continue
                     if item is None:
                         break
-                    yield item
+                    seq += 1
+                    yield f"id: {seq}\n{item}"
             finally:
                 heartbeat_task.cancel()
                 if not agent_task.done():

@@ -18,6 +18,9 @@ class LLMConfig(BaseModel):
         default_factory=lambda: {"input": 0.000003, "output": 0.000015}
     )
     strip_reasoning: bool = False
+    max_retries: int = 3
+    retry_backoff_secs: float = 1.0
+    retry_backoff_multiplier: float = 2.0
 
     @model_validator(mode="after")
     def apply_provider_defaults(self) -> LLMConfig:

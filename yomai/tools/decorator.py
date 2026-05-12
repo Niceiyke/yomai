@@ -73,15 +73,20 @@ def _build_schema(fn: Callable[..., Any]) -> ToolSchema:
 
 
 @overload
-def tool(fn: F, *, cache_ttl: int | None = None) -> F: ...
+def tool(fn: F, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0) -> F: ...
 
 
 @overload
-def tool(fn: None = None, *, cache_ttl: int | None = None) -> Callable[[F], F]: ...
+def tool(fn: None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0) -> Callable[[F], F]: ...
 
 
-def tool(fn: F | None = None, *, cache_ttl: int | None = None) -> F | Callable[[F], F]:
-    """Mark a sync or async Python function as LLM-callable while preserving its type."""
+def tool(fn: F | None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0) -> F | Callable[[F], F]:
+    """Mark a sync or async Python function as LLM-callable while preserving its type.
+
+    Args:
+        timeout_secs: Max seconds a single tool invocation may run before being cancelled.
+        max_retries: Number of retry attempts on tool failure (0 = no retry).
+    """
     if cache_ttl is not None:
         warnings.warn(
             "cache_ttl has no effect in V1. Redis-backed caching ships in V2.",
@@ -92,6 +97,8 @@ def tool(fn: F | None = None, *, cache_ttl: int | None = None) -> F | Callable[[
     def decorate(func: F) -> F:
         func.schema = _build_schema(func)
         func.tool_name = func.__name__
+        func._tool_timeout_secs = timeout_secs
+        func._tool_max_retries = max_retries
         _registry.register(func)
         return func
 
