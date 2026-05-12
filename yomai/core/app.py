@@ -464,6 +464,7 @@ class Yomai:
         body: dict[str, Any],
         session_id: str,
         path_kwargs: dict[str, Any],
+        max_retries: int = 0,
     ) -> None:
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         current = await self.jobs.get(job_id)
@@ -482,47 +483,47 @@ class Yomai:
 
         consumer = asyncio.create_task(consume_events())
         try:
-            runner = WorkflowRunner(queue, session_id, self.memory, self, job_id=job_id)
-            from yomai.core.router import WorkflowRoute
+            for attempt in range(max_retries + 1):
+                if attempt > 0:
+                    await asyncio.sleep(1.0 * (2 ** (attempt - 1)))
+                    await self.jobs.update_status(job_id, "retrying")
+                    await self.hooks.emit("workflow.retrying", job_id=job_id, route=path, attempt=attempt)
 
-            route = WorkflowRoute(path, handler, self, self.memory)
-            kwargs = route._build_kwargs(body, runner, path_kwargs, session_id=session_id)
-            result = handler(**kwargs)
-            if inspect.isawaitable(result):
-                result = await result
-            await queue.put(sse_result(result if result is not None else ""))
-            await queue.put(self._done_sse())
-            await self.jobs.update_status(job_id, "succeeded", result=result)
-            await self.hooks.emit("workflow.done", job_id=job_id, route=path, result=result)
-            await self.hooks.emit("job.succeeded", job_id=job_id, route=path, result=result)
-            released = self.rate_limiter.release_concurrent(session_id)
-            if inspect.isawaitable(released):
-                await released
-        except asyncio.CancelledError:
-            from yomai.streaming.sse import sse_error
+                try:
+                    runner = WorkflowRunner(queue, session_id, self.memory, self, job_id=job_id)
+                    from yomai.core.router import WorkflowRoute
 
-            await self._incr_metric("errors_total")
-            await self.jobs.update_status(job_id, "cancelled", error="Job cancelled")
-            await queue.put(sse_error("Job cancelled", "cancelled"))
-            await self.hooks.emit("job.cancelled", job_id=job_id, route=path)
-            released = self.rate_limiter.release_concurrent(session_id)
-            if inspect.isawaitable(released):
-                await released
-            await queue.put(self._done_sse())
-        except Exception as exc:  # noqa: BLE001 - jobs must persist failures
-            message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
-            from yomai.streaming.sse import sse_error
+                    route = WorkflowRoute(path, handler, self, self.memory)
+                    kwargs = route._build_kwargs(body, runner, path_kwargs, session_id=session_id)
+                    result = handler(**kwargs)
+                    if inspect.isawaitable(result):
+                        result = await result
+                    await queue.put(sse_result(result if result is not None else ""))
+                    await queue.put(self._done_sse())
+                    await self.jobs.update_status(job_id, "succeeded", result=result)
+                    await self.hooks.emit("workflow.done", job_id=job_id, route=path, result=result)
+                    await self.hooks.emit("job.succeeded", job_id=job_id, route=path, result=result)
+                    released = self.rate_limiter.release_concurrent(session_id)
+                    if inspect.isawaitable(released):
+                        await released
+                    break  # Success
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if attempt >= max_retries:
+                        message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
+                        from yomai.streaming.sse import sse_error
 
-            await queue.put(sse_error(message_out, exc.__class__.__name__))
-            await queue.put(self._done_sse())
-            await self._incr_metric("errors_total")
-            await self.jobs.update_status(job_id, "failed", error=message_out)
-            await self.hooks.emit("workflow.failed", job_id=job_id, route=path, error=message_out)
-            await self.hooks.emit("job.failed", job_id=job_id, route=path, error=message_out)
-            await self.hooks.emit("error", job_id=job_id, route=path, error=message_out)
-            released = self.rate_limiter.release_concurrent(session_id)
-            if inspect.isawaitable(released):
-                await released
+                        await queue.put(sse_error(message_out, exc.__class__.__name__))
+                        await queue.put(self._done_sse())
+                        await self._incr_metric("errors_total")
+                        await self.jobs.update_status(job_id, "failed", error=message_out)
+                        await self.hooks.emit("workflow.failed", job_id=job_id, route=path, error=message_out)
+                        await self.hooks.emit("job.failed", job_id=job_id, route=path, error=message_out)
+                        await self.hooks.emit("error", job_id=job_id, route=path, error=message_out)
+                        released = self.rate_limiter.release_concurrent(session_id)
+                        if inspect.isawaitable(released):
+                            await released
         finally:
             with contextlib.suppress(Exception):
                 await queue.put(None)
@@ -683,6 +684,7 @@ class Yomai:
         path: str,
         *,
         mode: str = "stream",
+        max_retries: int = 0,
         api_key: str | None = None,
         tags: list[str] | None = None,
         summary: str | None = None,
@@ -776,6 +778,7 @@ class Yomai:
                                 body=body,
                                 session_id=session_id,
                                 path_kwargs=path_kwargs,
+                                max_retries=max_retries,
                             )
                         )
                     else:
@@ -1264,7 +1267,7 @@ class Yomai:
         loop.create_task(self._drain_active_connections())
 
     async def _drain_active_connections(self) -> None:
-        deadline = asyncio.get_running_loop().time() + 30
+        deadline = asyncio.get_running_loop().time() + self.config.streaming.shutdown_timeout_secs
         while True:
             async with self._active_lock:
                 if self._active_connections <= 0:

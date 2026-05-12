@@ -69,6 +69,7 @@ class AgentConfig(BaseModel):
 class StreamingConfig(BaseModel):
     heartbeat_secs: int = 15
     max_duration_secs: int = 300
+    shutdown_timeout_secs: int = 30
 
 
 class QueueConfig(BaseModel):
