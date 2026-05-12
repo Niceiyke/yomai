@@ -97,3 +97,30 @@ def worker(
         with_scheduler=with_scheduler,
         worker_id=worker_id,
     )
+
+
+@app.command()
+def serve(
+    app_path: str = "main:app",
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    workers: int = 1,
+    proxy_headers: bool = False,
+) -> None:
+    """Production-grade server — multi-worker, no reload, proxy headers."""
+    import uvicorn
+
+    host = os.environ.get("HOST", host)
+    port = int(os.environ.get("PORT", port))
+    workers = int(os.environ.get("YOMAI_WORKERS", workers))
+    proxy_headers = os.environ.get("YOMAI_PROXY_HEADERS", str(proxy_headers)).lower() == "true"
+
+    uvicorn.run(
+        app_path,
+        host=host,
+        port=port,
+        workers=workers,
+        proxy_headers=proxy_headers,
+        log_level="info",
+        reload=False,
+    )

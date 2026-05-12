@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+dist/
+*.egg-info/
+.env
+yomai_sessions.db
+support_sessions.db
+.coverage
+coverage.xml
+node_modules/
+frontend/dist/
+*.db-journal
+*.db-wal
