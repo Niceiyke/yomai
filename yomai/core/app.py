@@ -486,7 +486,7 @@ class Yomai:
             from yomai.core.router import WorkflowRoute
 
             route = WorkflowRoute(path, handler, self, self.memory)
-            kwargs = route._build_kwargs(body, runner, path_kwargs)
+            kwargs = route._build_kwargs(body, runner, path_kwargs, session_id=session_id)
             result = handler(**kwargs)
             if inspect.isawaitable(result):
                 result = await result

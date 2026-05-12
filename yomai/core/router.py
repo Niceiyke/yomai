@@ -395,7 +395,8 @@ class WorkflowRoute(BaseRoute):
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
     def _build_kwargs(
-        self, body: dict[str, Any], runner: WorkflowRunner, path_kwargs: dict[str, Any], request: Request | None = None
+        self, body: dict[str, Any], runner: WorkflowRunner, path_kwargs: dict[str, Any],
+        request: Request | None = None, session_id: str | None = None,
     ) -> dict[str, Any]:
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
@@ -404,6 +405,8 @@ class WorkflowRoute(BaseRoute):
                 kwargs[name] = runner
             elif name == "request":
                 kwargs[name] = request
+            elif name == "session_id":
+                kwargs[name] = session_id
             elif name in path_kwargs:
                 kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
             elif name in body:
