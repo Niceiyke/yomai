@@ -9,6 +9,10 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
+from yomai.log import get as _get_logger
+
+_log = _get_logger("middleware")
+
 
 @dataclass(slots=True)
 class ToolLog:
@@ -72,25 +76,35 @@ class StreamLog:
 
     def emit(self) -> None:
         elapsed = time.monotonic() - self.started_at
-        status = "✗" if self.errored else "✓"
-        print(f"[{time.strftime('%H:%M:%S')}] {self.method} {self.path}  session={self.session_id}")
-        for tool in self.tools.values():
-            args = ", ".join(f"{k}={v!r}" for k, v in tool.args.items())
-            result = tool.result if len(tool.result) <= 80 else tool.result[:77] + "..."
-            print(f"           ⚙ {tool.name}({args})  →  {result!r}  {tool.duration_ms}ms")
-        for step in self.steps:
-            if step.get("done"):
-                print(f"           ▸ step {step.get('name')}  {step.get('duration_ms', 0)}ms  ✓")
-        token_part = f"{self.input_tokens}→{self.output_tokens} tokens" if self.input_tokens or self.output_tokens else "tokens n/a"
-        print(f"           {status} {elapsed:.1f}s  ·  {token_part}  ·  ~${self.cost_usd:.6f} (est.)")
+        tool_calls = [
+            {"name": t.name, "args": t.args, "result": (t.result[:200] if len(t.result) > 200 else t.result),
+             "duration_ms": t.duration_ms}
+            for t in self.tools.values()
+        ]
+        workflow_steps = [
+            {"name": s["name"], "duration_ms": s.get("duration_ms", 0)}
+            for s in self.steps if s.get("done")
+        ]
+        _log.info(
+            "%s %s",
+            self.method, self.path,
+            extra=_extra(
+                route=self.path,
+                session_id=self.session_id,
+                method=self.method,
+                duration_ms=round(elapsed * 1000),
+                tokens_in=self.input_tokens,
+                tokens_out=self.output_tokens,
+                cost_usd=round(self.cost_usd, 6),
+                errored=self.errored,
+                tool_calls=tool_calls or None,
+                workflow_steps=workflow_steps or None,
+            ),
+        )
 
 
 class LoggingMiddleware(BaseHTTPMiddleware):
-    """Minimal fallback request logger.
-
-    Streaming routes use `StreamLog` directly so they can observe SSE events.
-    This middleware intentionally avoids duplicate POST logs for Yomai routes.
-    """
+    """Request logger for non-streaming routes."""
 
     def __init__(self, app: Any, enabled: bool = True) -> None:
         super().__init__(app)
@@ -99,5 +113,13 @@ class LoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         response = await call_next(request)
         if self.enabled and request.method != "POST" and not request.url.path.startswith("/__yomai__"):
-            print(f"[{time.strftime('%H:%M:%S')}] {request.method} {request.url.path}  status={response.status_code}")
+            _log.info(
+                "%s %s", request.method, request.url.path,
+                extra=_extra(method=request.method, route=request.url.path, status_code=response.status_code),
+            )
         return response
+
+
+def _extra(**kwargs: Any) -> dict[str, Any]:
+    """Build extra dict for structured logging, dropping None values."""
+    return {k: v for k, v in kwargs.items() if v is not None}

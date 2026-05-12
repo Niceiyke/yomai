@@ -50,7 +50,9 @@ from yomai.limits import InMemoryRateLimiter, RedisRateLimiter
 from yomai.llm import LLMProvider
 from yomai.llm.anthropic import AnthropicProvider
 from yomai.llm.openai import OpenAIProvider
+from yomai.log import setup as _setup_logging
 from yomai.memory import DictMemory, MemoryBackend, RedisMemory, SqliteMemory
+from yomai.metrics import registry as _metrics_registry
 from yomai.middleware.errors import ErrorMiddleware
 from yomai.middleware.logging import LoggingMiddleware
 from yomai.openapi.schema import build_openapi
@@ -230,6 +232,7 @@ class Yomai:
             budgets=budgets or BudgetConfig(),
             dev=dev or DevConfig(),
         )
+        _setup_logging()
         self.memory: MemoryBackend = self._build_memory(self.config.memory)
         self.jobs = self._build_job_store()
         self.job_events = self._build_job_event_store()
@@ -320,8 +323,44 @@ class Yomai:
             return Response(status_code=404)
         return HTMLResponse(get_playground_html(self._routes_meta))
 
-    async def _health(self, request: Request) -> JSONResponse:
-        return JSONResponse({"status": "ok", "version": "0.1.0"})
+    async def _health(self, request: Request) -> Response:
+        depth = request.query_params.get("depth", "shallow")
+        response: dict[str, Any] = {"status": "ok", "version": "0.1.0"}
+
+        if depth == "deep":
+            deps: dict[str, Any] = {}
+
+            # LLM provider check
+            try:
+                self._build_provider()
+                deps["llm"] = {"status": "ok", "provider": self.config.llm.provider, "model": self.config.llm.model}
+            except Exception as exc:
+                deps["llm"] = {"status": "error", "error": str(exc)}
+
+            # Redis check
+            if self.config.queue.backend == "swiftq" or self.config.memory.backend == "redis":
+                try:
+                    import redis.asyncio as redis_lib
+                    r = redis_lib.from_url(self.config.queue.url or "redis://localhost:6379/0")
+                    await r.ping()  # type: ignore[reportGeneralTypeIssues]
+                    await r.aclose()
+                    deps["redis"] = {"status": "ok"}
+                except Exception as exc:
+                    deps["redis"] = {"status": "error", "error": str(exc)}
+
+            # SQLite check
+            if self.config.memory.backend == "sqlite":
+                try:
+                    conn = self.memory._connect()  # type: ignore[reportAttributeAccessIssue]
+                    conn.execute("SELECT 1")
+                    conn.close()
+                    deps["sqlite"] = {"status": "ok"}
+                except Exception as exc:
+                    deps["sqlite"] = {"status": "error", "error": str(exc)}
+
+            response["dependencies"] = deps
+
+        return JSONResponse(response)
 
     async def _routes(self, request: Request) -> JSONResponse:
         auth_error = self._metadata_auth_error(request)
@@ -348,10 +387,17 @@ class Yomai:
             return JSONResponse({"error": "Job not found"}, status_code=404)
         return JSONResponse(job.to_dict())
 
-    async def _metrics(self, request: Request) -> JSONResponse:
+    async def _metrics(self, request: Request) -> Response:
         auth_error = self._metadata_auth_error(request)
         if auth_error is not None:
             return auth_error
+
+        # Prometheus format when available
+        accept = request.headers.get("Accept", "")
+        if "text/plain" in accept and _metrics_registry.available:
+            from starlette.responses import PlainTextResponse
+            return PlainTextResponse(_metrics_registry.get_metrics().decode(), media_type="text/plain; version=0.0.4")
+
         jobs = list(await self.jobs.list())
         by_status = Counter(job.status for job in jobs)
         metrics = await self._get_metrics_snapshot()
