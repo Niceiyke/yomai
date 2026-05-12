@@ -3,7 +3,7 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections.abc import Callable
-from typing import Any, TypeVar, get_args, get_origin, get_type_hints, overload
+from typing import Any, Literal, TypeVar, get_args, get_origin, get_type_hints, overload
 
 from yomai.tools.registry import ToolSchema, _registry
 
@@ -25,6 +25,12 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
 
     origin = get_origin(annotation)
     args = get_args(annotation)
+
+    if origin is Literal:
+        values = list(args)
+        base = type(values[0]) if values else str
+        schema = {"type": _TYPE_MAP.get(base, "string"), "enum": values}
+        return schema
 
     if origin is list or annotation is list:
         item_schema = _json_schema_for_annotation(args[0]) if args else {}

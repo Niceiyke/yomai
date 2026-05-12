@@ -23,8 +23,14 @@ class YomaiTestClient:
         events = await self.get_events(path, message, session_id=session_id, extra_body=extra_body)
         return [str(event.get("content", "")) for event in events if event.get("type") == "chunk"]
 
-    async def call(self, path: str, message: str, session_id: str | None = None) -> str:
-        return "".join(await self.stream(path, message, session_id=session_id))
+    async def call(
+        self,
+        path: str,
+        message: str,
+        session_id: str | None = None,
+        extra_body: dict[str, Any] | None = None,
+    ) -> str:
+        return "".join(await self.stream(path, message, session_id=session_id, extra_body=extra_body))
 
     async def get_events(
         self,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from yomai.exceptions import YomaiConfigError
 
@@ -11,13 +11,25 @@ from yomai.exceptions import YomaiConfigError
 class LLMConfig(BaseModel):
     provider: Literal["anthropic", "openai"] = "anthropic"
     model: str = "claude-sonnet-4-20250514"
-    api_key: str = Field(default_factory=lambda: os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY", ""))
-    base_url: str | None = Field(default_factory=lambda: os.environ.get("ANTHROPIC_BASE_URL") or os.environ.get("OPENAI_BASE_URL"))
+    api_key: str = ""
+    base_url: str | None = None
     max_tokens: int = 1024
     cost_per_token: dict[str, float] = Field(
         default_factory=lambda: {"input": 0.000003, "output": 0.000015}
     )
     strip_reasoning: bool = False
+
+    @model_validator(mode="after")
+    def apply_provider_defaults(self) -> "LLMConfig":
+        if not self.api_key:
+            env_key = "OPENAI_API_KEY" if self.provider == "openai" else "ANTHROPIC_API_KEY"
+            self.api_key = os.environ.get(env_key, "")
+        if self.base_url is None:
+            env_url = "OPENAI_BASE_URL" if self.provider == "openai" else "ANTHROPIC_BASE_URL"
+            self.base_url = os.environ.get(env_url)
+        if self.provider == "openai" and self.model == "claude-sonnet-4-20250514":
+            self.model = "gpt-4o-mini"
+        return self
 
 
 class MemoryConfig(BaseModel):

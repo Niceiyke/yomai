@@ -14,3 +14,4 @@ jobs:
       - run: uv run pyright
       - run: uv run pytest -q
       - run: uv build
+      - run: ./scripts/install_smoke.sh
