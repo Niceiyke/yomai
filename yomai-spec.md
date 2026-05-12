@@ -235,40 +235,172 @@ V1 has one job: get a developer from zero to a working, streaming, tool-calling 
 
 #### 4.1.1 Routing
 
-Two decorators. Nothing else.
+Six route decorators.
 
 ```python
-@app.agent(path: str, tools: list | None = None)
-@app.workflow(path: str)
+@app.agent(path: str, tools: list | None = None, *, system: str = "", ...)
+@app.workflow(path: str, *, mode: str = "stream", ...)
+@app.get(path: str, *, summary: str | None = None, ...)
+@app.delete(path: str, *, summary: str | None = None, ...)
+@app.patch(path: str, *, summary: str | None = None, ...)
+@app.put(path: str, *, summary: str | None = None, ...)
+@app.head(path: str, ...)
+@app.options(path: str, ...)
 ```
 
-Both register an HTTP POST endpoint that returns a streaming SSE response. V1 routes are static paths; Starlette-style path parameters such as `/chat/{agent_type}` are deferred to V2.
+**`@app.agent`** and **`@app.workflow`** register streaming SSE POST endpoints (the primary agents and workflows).
 
-Route conflicts (duplicate paths) raise a clear error at startup, not at runtime.
+**`@app.get`**, **`@app.delete`**, **`@app.patch`**, **`@app.put`** register non-streaming JSON endpoints for CRUD operations on sessions or other resources.
+
+**`@app.head`** registers a HEAD endpoint (useful for existence checks). **`@app.options`** registers an OPTIONS endpoint (used for CORS preflight).
+
+#### Path Parameters
+
+Path parameters use Starlette-style `{param_name}` syntax:
+
+```python
+@app.agent("/chat/{session_id}")
+async def chat(message: str, session_id: str):
+    pass
+```
+
+The `{session_id}` segment is extracted from the URL path and injected as a typed function parameter. Path parameters are distinct from body parameters in OpenAPI generation.
+
+#### Route Metadata
+
+Every route decorator accepts these optional kwargs:
+
+| kwarg | purpose |
+|---|---|
+| `tags: list[str]` | OpenAPI tag grouping (e.g. `["support", "v2"]`) |
+| `summary: str` | Short human-readable summary for OpenAPI |
+| `description: str` | Long description for OpenAPI |
+| `deprecated: bool` | Marks the route as deprecated in OpenAPI |
+| `cors: dict` | Per-route CORS configuration (see below) |
+| `dependencies: list[Depends]` | Route-level dependency injection callables |
+| `api_key: str` | Route-specific API key override |
+
+#### Per-Route CORS
+
+```python
+@app.agent("/chat", cors={
+    "allow_origins": ["https://app.example.com"],
+    "allow_methods": ["POST"],
+    "allow_headers": ["Content-Type", "Authorization"],
+    "allow_credentials": True,
+})
+```
+
+CORS headers are set on every response from that route. CORS is NOT global middleware — each route can have its own origin allowlist.
+
+#### Depends — Route-Level Dependency Injection
+
+`Depends` runs a callable before the route handler and can short-circuit with an error:
+
+```python
+def verify_session(request) -> dict:
+    session_id = request.headers.get("X-Session-Id", "")
+    if not session_id:
+        raise HTTPException(401, "Session ID required")
+    return {"session_id": session_id}
+
+@app.agent("/chat", dependencies=[Depends(verify_session)])
+async def chat(message: str, session_id: str):
+    pass
+```
+
+The callable receives the Starlette `Request` object. If it raises an exception, the route returns an error response. If it returns a value, the result is discarded — `Depends` is currently a pre-processing hook only (results are not injected into handlers; use `request.state` for shared data).
+
+#### RouteGroup — Grouping and Versioning
+
+`RouteGroup` groups agents and workflows under a shared URL prefix and shared config:
+
+```python
+v1 = RouteGroup("/api/v1", tags=["v1"], deprecated=True)
+
+@v1.agent("/chat")
+async def chat(message: str, session_id: str):
+    pass
+
+@v1.workflow("/search")
+async def search(topic: str, runner: WorkflowRunner):
+    ...
+
+app.include_router(v1)
+# Registers: POST /api/v1/chat, POST /api/v1/search
+```
+
+Shared config applied to every route in the group (but overridable per-route):
+- `tags` — merged with per-route tags
+- `cors` — applied to every route unless overridden
+- `deprecated` — applied to every route unless overridden
+
+#### Route Conflicts
+
+Duplicate paths raise a `YomaiRouteError` at startup, not at runtime.
+
+#### System Routes
 
 Three system routes are mounted automatically:
 - `GET /__yomai__` — dev playground (dev mode only)
 - `GET /__yomai__/health` — health check
 - `GET /__yomai__/routes` — introspection endpoint listing all registered routes
+- `GET /__yomai__/openapi.json` — OpenAPI 3.1 schema
 
 #### 4.1.2 Agent Decorator
 
 ```python
-@app.agent("/chat", tools=[get_weather, search_flights])
+@app.agent("/chat/{session_id}", tools=[get_weather, search_flights], system="You are helpful.")
 async def chat_agent(message: str, session_id: str):
     pass  # marker-only handler; framework runs the LLM/tool/memory loop
 ```
 
 The decorator:
-- Registers the path as a POST endpoint
+- Registers the path as a POST endpoint (supports path parameters)
 - Stores route metadata, tools, and app/config references on the decorated function for workflows and introspection
 - Injects `message` from request body automatically
 - Injects `session_id` from `X-Session-Id` header; auto-generates a UUID if the header is absent and returns it in the response header
+- Injects path parameters (e.g. `session_id` from `/chat/{session_id}`) from the URL path
+- Supports custom `system` prompt override
 - Wraps the internal agent loop in a `StreamingResponse`
 - Emits SSE-formatted events from the internal agent loop
 - Emits `done` event on clean completion
 - Emits `error` event on exception, even mid-stream
 - Cancels the LLM call if the client disconnects
+
+#### 4.1.3 Non-Streaming Route Decorators
+
+```python
+# GET — for reading session history or other data
+@app.get("/sessions/{session_id}", tags=["sessions"])
+async def get_session(session_id: str):
+    # Non-streaming JSON response
+    return {"session_id": session_id, "message_count": 10}
+
+# DELETE — for clearing sessions
+@app.delete("/sessions/{session_id}", tags=["sessions"])
+async def delete_session(session_id: str):
+    await memory.clear(session_id)
+    return {"deleted": session_id}
+
+# PATCH — for partial updates
+@app.patch("/sessions/{session_id}", tags=["sessions"])
+async def update_session(session_id: str, message: str | None = None):
+    return {"updated": session_id}
+
+# PUT — for full replacement
+@app.put("/sessions/{session_id}", tags=["sessions"])
+async def replace_session(session_id: str, topic: str):
+    return {"replaced": session_id, "topic": topic}
+```
+
+All non-streaming routes:
+- Return JSON responses (not SSE)
+- Support path parameters extracted from `{param_name}` in the URL path
+- Support query parameters for GET requests
+- Support body parameters via JSON request body for PATCH/PUT/DELETE
+- Support the same CORS, auth, dependency injection, and metadata options as agents
+- Inject `session_id` from `X-Session-Id` header if the handler function has a `session_id` parameter
 
 #### 4.1.3 Tool Decorator
 
@@ -579,7 +711,7 @@ The following are out of scope for V1. Attempting to use them raises a helpful `
 This is the complete list of symbols a developer imports and uses. Nothing else is public API.
 
 ```python
-from yomai import Yomai, tool
+from yomai import Yomai, tool, Depends, RouteGroup
 from yomai.config import Config, LLMConfig, MemoryConfig, AgentConfig, StreamingConfig, DevConfig
 from yomai.memory import MemoryBackend          # ABC for custom backends
 from yomai.workflow import WorkflowRunner
@@ -1166,9 +1298,10 @@ function Chat() {
 pyproject.toml               # Package metadata, dependencies, CLI entry point
 yomai/
 ├── core/
-│   ├── app.py              # Yomai class, @app.agent, @app.workflow
+│   ├── app.py              # Yomai class, @app.agent, @app.workflow, Depends, RouteGroup
 │   ├── agent.py            # Agent loop, tool execution
-│   └── router.py           # AgentRoute, WorkflowRoute, HTTP/SSE wiring
+│   └── router.py           # AgentRoute, WorkflowRoute, GetRoute, DeleteRoute,
+│                           #   HeadRoute, OptionsRoute, PatchRoute, PutRoute, HTTP/SSE wiring
 │
 ├── workflow/
 │   ├── runner.py           # WorkflowRunner, step(), parallel()

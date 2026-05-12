@@ -1,6 +1,7 @@
 """Tests for the research assistant app."""
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from yomai import Yomai, tool
@@ -23,14 +24,20 @@ def test_app_routes_registered() -> None:
     """App has expected routes registered."""
     from app.agents.researcher import app
 
-    # Agent route
-    assert "/research" in app._paths
+    paths = list(app._paths)
+    # Streaming agents
+    assert "/research" in paths
+    assert "/v2/research" in paths
+    # Non-streaming CRUD
+    assert "/sessions/{session_id}" in paths
 
-    # Routes metadata has them
     metas = app._routes_meta
     research_meta = next(m for m in metas if m["path"] == "/research")
     assert research_meta["type"] == "agent"
     assert "web_search" in research_meta["tools"]
+
+    session_meta = next(m for m in metas if m["path"] == "/sessions/{session_id}")
+    assert session_meta["type"] == "get"
 
 
 @pytest.mark.asyncio
@@ -45,14 +52,74 @@ async def test_research_route_mock() -> None:
 
 
 @pytest.mark.asyncio
-async def test_openapi_schema_has_all_routes() -> None:
-    """OpenAPI schema includes all registered routes."""
+async def test_session_get_endpoint() -> None:
+    """GET /sessions/{session_id} returns message history."""
+    import httpx
+    from httpx import ASGITransport
+    from typing import Any, cast
+
     from app.agents.researcher import app
 
-    from starlette.testclient import TestClient
+    transport = ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        await app.memory.save("test-sid", "hello", "hi there")
+        resp = await client.get("/sessions/test-sid")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["session_id"] == "test-sid"
+    assert data["message_count"] == 2
 
-    client = TestClient(app)
-    resp = client.get("/__yomai__/openapi.json")
+
+@pytest.mark.asyncio
+async def test_session_delete_requires_auth() -> None:
+    """DELETE /sessions/{session_id} returns 401 without auth."""
+    import httpx
+    from httpx import ASGITransport
+    from typing import Any, cast
+
+    from app.agents.researcher import app
+
+    transport = ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.delete("/sessions/any-id")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_openapi_schema_has_all_routes() -> None:
+    """OpenAPI schema includes all registered routes."""
+    import httpx
+    from httpx import ASGITransport
+    from typing import Any, cast
+
+    from app.agents.researcher import app
+
+    transport = ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/__yomai__/openapi.json")
     assert resp.status_code == 200
     schema = resp.json()
     assert "/research" in schema["paths"]
+    assert "/v2/research" in schema["paths"]
+    assert "/sessions/{session_id}" in schema["paths"]
+    get_op = schema["paths"]["/sessions/{session_id}"].get("get")
+    assert get_op is not None
+    assert get_op["summary"] == "Get session message history"
+    assert "cors" in next(m for m in app._routes_meta if m["path"] == "/research")
+
+
+@pytest.mark.asyncio
+async def test_cors_header_on_agent() -> None:
+    """Agent with per-route CORS sets header on response."""
+    from typing import cast, Any
+
+    import httpx
+    from httpx import ASGITransport
+
+    from app.agents.researcher import app
+
+    transport = ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.get("/__yomai__/openapi.json")
+    research_meta = next(m for m in app._routes_meta if m["path"] == "/research")
+    assert research_meta["cors"]["allow_origins"] == ["http://localhost:3000"]

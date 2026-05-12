@@ -292,3 +292,195 @@ async def test_api_key_auth_on_agent() -> None:
         r2 = await client.post("/auth-chat", json={"message": "hi"}, headers={"Authorization": "Bearer secret"})
         assert r2.status_code != 401
 
+
+@pytest.mark.asyncio
+async def test_agent_handler_receives_extra_body_and_session() -> None:
+    seen: dict[str, Any] = {}
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/chat")
+    async def chat(message: str, session_id: str, tone: str = "plain") -> None:
+        seen.update({"message": message, "session_id": session_id, "tone": tone})
+
+    with mock_llm(["ok"]):
+        assert await YomaiTestClient(app).call("/chat", "hello", session_id="sid", extra_body={"tone": "warm"}) == "ok"
+    assert seen == {"message": "hello", "session_id": "sid", "tone": "warm"}
+
+
+@pytest.mark.asyncio
+async def test_route_tool_isolation() -> None:
+    @tool
+    def secret_tool() -> str:
+        return "secret leaked"
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/chat", tools=[])
+    async def chat(message: str) -> None:
+        pass
+
+    with mock_llm([[MockToolCall("secret_tool", {})]]):
+        events = await YomaiTestClient(app).get_events("/chat", "try tool")
+    assert any(event.get("code") == "unknown_tool" for event in events)
+    assert not any(event.get("result") == "secret leaked" for event in events)
+
+
+@pytest.mark.asyncio
+async def test_metadata_requires_auth_in_production() -> None:
+    from yomai.config import DevConfig
+
+    old = os.environ.get("YOMAI_ENV")
+    os.environ["YOMAI_ENV"] = "production"
+    try:
+        app = Yomai(
+            llm=LLMConfig(api_key=""),
+            memory=MemoryConfig(backend="dict", db_path="/unused"),
+            dev=DevConfig(api_key="meta-secret"),
+        )
+        transport = httpx.ASGITransport(app=cast(Any, app))
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            assert (await client.get("/__yomai__/routes")).status_code == 401
+            ok = await client.get("/__yomai__/routes", headers={"Authorization": "Bearer meta-secret"})
+            assert ok.status_code == 200
+    finally:
+        if old is None:
+            os.environ.pop("YOMAI_ENV", None)
+        else:
+            os.environ["YOMAI_ENV"] = old
+
+
+@pytest.mark.asyncio
+async def test_streaming_errors_are_generic_in_production() -> None:
+    old = os.environ.get("YOMAI_ENV")
+    os.environ["YOMAI_ENV"] = "production"
+    try:
+        app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+        @app.agent("/boom")
+        async def boom(message: str) -> None:
+            raise RuntimeError("sensitive detail")
+
+        events = await YomaiTestClient(app).get_events("/boom", "hi")
+        error = next(event for event in events if event.get("type") == "error")
+        assert error["message"] == "Internal server error"
+        assert "sensitive" not in str(events)
+    finally:
+        if old is None:
+            os.environ.pop("YOMAI_ENV", None)
+        else:
+            os.environ["YOMAI_ENV"] = old
+
+
+def test_openai_provider_defaults_are_provider_specific() -> None:
+    cfg = LLMConfig(provider="openai", api_key="x")
+    assert cfg.model == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_agent_extra_body_is_pydantic_validated() -> None:
+    seen: dict[str, Any] = {}
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/typed")
+    async def typed(message: str, count: int) -> None:
+        seen["count"] = count
+
+    with mock_llm(["ok"]):
+        await YomaiTestClient(app).call("/typed", "hi", extra_body={"count": "3"})
+    assert seen["count"] == 3
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/typed", json={"message": "hi", "count": "bad"})
+    assert response.status_code == 400
+    assert "Invalid field count" in response.json()["error"]
+
+
+@pytest.mark.asyncio
+async def test_workflow_body_is_pydantic_validated() -> None:
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.workflow("/typed-workflow")
+    async def typed_workflow(count: int) -> int:
+        return count + 1
+
+    events = await YomaiTestClient(app).get_events("/typed-workflow", "ignored", extra_body={"count": "2"})
+    assert any(event.get("type") == "result" and event.get("content") == "3" for event in events)
+    bad = await YomaiTestClient(app).get_events("/typed-workflow", "ignored", extra_body={"count": "bad"})
+    assert any(event.get("type") == "error" and "Invalid field count" in event.get("message", "") for event in bad)
+
+
+@pytest.mark.asyncio
+async def test_per_route_api_key_override() -> None:
+    from yomai.config import DevConfig
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"), dev=DevConfig(api_key="global"))
+
+    @app.agent("/public", api_key="")
+    async def public(message: str) -> None:
+        pass
+
+    @app.workflow("/route-secret", api_key="route")
+    async def route_secret() -> str:
+        return "ok"
+
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        assert (await client.post("/public", json={"message": "hi"})).status_code != 401
+        assert (await client.post("/route-secret", json={})).status_code == 401
+        assert (await client.post("/route-secret", json={}, headers={"Authorization": "Bearer route"})).status_code != 401
+
+
+def test_signed_session_middleware_sign_and_verify() -> None:
+    from yomai.middleware import SignedSessionMiddleware
+
+    mw = SignedSessionMiddleware(lambda scope, receive, send: None, secret="secret")
+    signed = mw.sign("session-1")
+    assert mw.verify(signed) == "session-1"
+    assert mw.verify(signed + "tampered") is None
+
+
+@pytest.mark.asyncio
+async def test_openapi_includes_tool_schemas() -> None:
+    @tool
+    def lookup(city: str) -> str:
+        """Lookup a city."""
+        return city
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/with-tool", tools=[lookup])
+    async def chat(message: str) -> None:
+        pass
+
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        schema = (await client.get("/__yomai__/openapi.json")).json()
+    assert schema["components"]["schemas"]["Tool_lookup"]["properties"]["city"] == {"type": "string"}
+
+
+@pytest.mark.asyncio
+async def test_dict_memory_ttl_evicts_expired_session() -> None:
+    mem = DictMemory(max_messages=5, ttl_hours=1)
+    await mem.save("s", "hello", "hi")
+    mem._store["s"] = (asyncio.get_running_loop().time() - 7200, mem._store["s"][1])
+    assert await mem.load("s") == []
+
+
+@pytest.mark.asyncio
+async def test_sqlite_memory_ttl_evicts_expired_session() -> None:
+    import sqlite3
+    import tempfile
+
+    db = tempfile.mktemp(suffix=".db")
+    try:
+        mem = SqliteMemory(db_path=db, max_messages=5, ttl_hours=1)
+        await mem.save("s", "hello", "hi")
+        conn = sqlite3.connect(db)
+        conn.execute("UPDATE sessions SET updated_at = strftime('%s','now') - 7200 WHERE session_id = 's'")
+        conn.commit()
+        conn.close()
+        assert await mem.load("s") == []
+    finally:
+        if os.path.exists(db):
+            os.unlink(db)
+
