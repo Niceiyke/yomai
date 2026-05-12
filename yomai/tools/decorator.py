@@ -90,8 +90,8 @@ def tool(fn: F | None = None, *, cache_ttl: int | None = None) -> F | Callable[[
         )
 
     def decorate(func: F) -> F:
-        setattr(func, "schema", _build_schema(func))
-        setattr(func, "tool_name", func.__name__)
+        func.schema = _build_schema(func)
+        func.tool_name = func.__name__
         _registry.register(func)
         return func
 

@@ -43,6 +43,56 @@ Open the playground at `http://localhost:8000/__yomai__`.
 
 Expected SSE events include `tool_start`, `tool_end`, `chunk`, `usage`, and `done`.
 
+## V2 preview: production runtime
+
+Yomai V2 work adds durable async workflow infrastructure while keeping V1 routes compatible.
+
+```python
+from yomai import Yomai
+from yomai.config import LLMConfig, MemoryConfig, QueueConfig, RateLimitConfig
+
+app = Yomai(
+    llm=LLMConfig(provider="anthropic"),
+    memory=MemoryConfig(backend="redis", url="redis://localhost:6379/0"),
+    queue=QueueConfig(backend="swiftq", url="redis://localhost:6379/0"),
+    rate_limits=RateLimitConfig(requests_per_minute=60, max_concurrent_per_session=3),
+)
+
+@app.workflow("/research", mode="async")
+async def research(topic: str, runner):
+    return {"topic": topic}
+```
+
+Async workflow requests return `202 Accepted` with `job_id`, `status_url`, and `stream_url`. Job streams are reconnectable via `Last-Event-ID`.
+
+Useful endpoints:
+
+- `GET /__yomai__/jobs/{job_id}`
+- `GET /__yomai__/jobs/{job_id}/stream`
+- `POST /__yomai__/jobs/{job_id}/cancel`
+- `GET /__yomai__/metrics`
+
+Run a worker for swiftQ-backed workflows:
+
+```bash
+yomai worker main:app --concurrency 4
+```
+
+Hooks:
+
+```python
+@app.on("job.succeeded")
+async def on_job_done(event):
+    print(event.payload)
+```
+
+Manual Redis/swiftQ smoke script:
+
+```bash
+uv run python scripts/swiftq_redis_smoke.py worker
+uv run python scripts/swiftq_redis_smoke.py web
+```
+
 ## Testing
 
 ```python

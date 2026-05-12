@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from typing import Any, TypeAlias, Union
+from typing import Any, TypeAlias
 
 Message: TypeAlias = dict[str, Any]
 ToolSchema: TypeAlias = dict[str, Any]
@@ -27,7 +27,7 @@ class Done:
     output_tokens: int = 0
 
 
-LLMEvent: TypeAlias = Union[TextChunk, ToolCall, Done]
+LLMEvent: TypeAlias = TextChunk | ToolCall | Done
 
 
 class LLMProvider(ABC):

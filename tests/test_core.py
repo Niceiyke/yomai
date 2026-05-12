@@ -10,7 +10,7 @@ import pytest
 
 from yomai import Yomai, tool
 from yomai.config import AgentConfig, LLMConfig, MemoryConfig
-from yomai.memory import DictMemory, MemoryBackend, SqliteMemory
+from yomai.memory import DictMemory, SqliteMemory
 from yomai.streaming.sse import format_sse
 from yomai.testing import MockToolCall, YomaiTestClient, capture_tools, mock_llm
 from yomai.workflow import WorkflowRunner
@@ -75,9 +75,8 @@ async def test_tool_capture() -> None:
         pass
 
     tool_call = MockToolCall("get_weather", {"city": "Tokyo"})
-    with mock_llm([[tool_call], ["sunny"]]):
-        with capture_tools("72F") as calls:
-            events = await YomaiTestClient(app).get_events("/chat", "weather")
+    with mock_llm([[tool_call], ["sunny"]]), capture_tools("72F") as calls:
+        events = await YomaiTestClient(app).get_events("/chat", "weather")
     assert calls[0].name == "get_weather"
     assert calls[0].args == {"city": "Tokyo"}
     assert any(event.get("type") == "tool_end" for event in events)
@@ -166,7 +165,7 @@ async def test_timeout_does_not_save_memory() -> None:
 @pytest.mark.asyncio
 async def test_tool_call_streams_before_provider_done() -> None:
     from yomai.core.agent import AgentLoop
-    from yomai.llm.base import Done, LLMEvent, Message, TextChunk, ToolCall, ToolSchema
+    from yomai.llm.base import Done, LLMEvent, Message, ToolCall, ToolSchema
 
     @tool
     def instant() -> str:
@@ -483,4 +482,89 @@ async def test_sqlite_memory_ttl_evicts_expired_session() -> None:
     finally:
         if os.path.exists(db):
             os.unlink(db)
+
+
+# ---------------------------------------------------------------------------
+# SSE sanitization tests
+# ---------------------------------------------------------------------------
+
+
+def test_format_sse_sanitizes_newlines_in_data() -> None:
+    """SSE data values containing newlines are replaced with spaces."""
+    result = format_sse("chunk", {"content": "hello\n\nworld"})
+    # The literal "\n\n" from the original data must not leak into the SSE output
+    assert "hello\n\nworld" not in result
+    assert "hello  world" in result
+
+
+def test_format_sse_sanitizes_newlines_in_event_type() -> None:
+    """SSE event type containing newlines is cleaned."""
+    result = format_sse("bad\nevent", {"type": "x"})
+    assert "bad\nevent" not in result
+    assert "badevent" in result
+
+
+def test_format_sse_sanitizes_nested_newlines() -> None:
+    """Nested dict and list values with newlines are sanitized."""
+    data = {
+        "items": ["a\nb", "c\nd"],
+        "meta": {"note": "line1\nline2"},
+    }
+    result = format_sse("chunk", data)
+    assert "a\nb" not in result
+    assert "c\nd" not in result
+    assert "line1\nline2" not in result
+    assert "a b" in result
+    assert "c d" in result
+    assert "line1 line2" in result
+
+
+# ---------------------------------------------------------------------------
+# strip_reasoning tests
+# ---------------------------------------------------------------------------
+
+
+def test_strip_reasoning_removes_think_blocks() -> None:
+    """Content inside <think>...</think> tags is removed when strip_reasoning is True."""
+    from unittest.mock import MagicMock
+
+    from yomai.core.agent import AgentLoop
+
+    mock_provider = MagicMock()
+    loop = AgentLoop(mock_provider, [], AgentConfig(), LLMConfig(api_key="x", strip_reasoning=True))
+    result = loop._maybe_strip_reasoning("<think>foo</think>bar")
+    assert result == "bar"
+
+
+def test_strip_reasoning_preserves_without_flag() -> None:
+    """Content is unchanged when strip_reasoning is False."""
+    from unittest.mock import MagicMock
+
+    from yomai.core.agent import AgentLoop
+
+    mock_provider = MagicMock()
+    loop = AgentLoop(mock_provider, [], AgentConfig(), LLMConfig(api_key="x", strip_reasoning=False))
+    original = "<think>foo</think>bar"
+    result = loop._maybe_strip_reasoning(original)
+    assert result == original
+
+
+def test_strip_reasoning_handles_split_blocks() -> None:
+    """Reasoning blocks split across multiple chunks are handled correctly via _inside_reasoning."""
+    from unittest.mock import MagicMock
+
+    from yomai.core.agent import AgentLoop
+
+    mock_provider = MagicMock()
+    loop = AgentLoop(mock_provider, [], AgentConfig(), LLMConfig(api_key="x", strip_reasoning=True))
+
+    # First chunk opens a think tag but does not close it
+    result1 = loop._maybe_strip_reasoning("<think>part1")
+    assert result1 == ""
+    assert loop._inside_reasoning is True
+
+    # Second chunk continues the reasoning and closes the tag
+    result2 = loop._maybe_strip_reasoning("part2</think>after")
+    assert result2 == "after"
+    assert loop._inside_reasoning is False
 

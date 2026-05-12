@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 PLAYGROUND_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>

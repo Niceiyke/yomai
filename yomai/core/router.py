@@ -3,21 +3,20 @@ from __future__ import annotations
 import asyncio
 import datetime
 import enum
-import hmac
 import inspect
-import os
-import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Union
+from typing import Any, Union, get_type_hints
 from uuid import UUID
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
-from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import JSONResponse, Response, StreamingResponse
 
+from yomai import env
+from yomai._types import Request, read_json_body
 from yomai.config import AgentConfig, LLMConfig
+from yomai.core._base_route import AcceptCallback, BaseRoute, LifecycleCallback
 from yomai.core.agent import AgentLoop
 from yomai.llm import LLMProvider
 from yomai.memory import MemoryBackend
@@ -27,16 +26,43 @@ from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_result
 from yomai.workflow.runner import WorkflowRunner
 
-
 # Reusable type adapters for common types
 _UUID_ADAPTER = TypeAdapter(UUID)
-_DATETIME_ADAPTER = TypeAdapter("datetime")  # will be resolved at runtime
+_DATETIME_ADAPTER = TypeAdapter(datetime.datetime)
+
+
+def _handler_type_hints(handler: Callable[..., Any]) -> dict[str, Any]:
+    localns: dict[str, Any] = dict(getattr(handler, "_yomai_type_locals", {}) or {})
+    closure = getattr(handler, "__closure__", None)
+    if closure:
+        for cell in closure:
+            try:
+                value = cell.cell_contents
+            except ValueError:
+                continue
+            name = getattr(value, "__name__", None)
+            if isinstance(name, str):
+                localns[name] = value
+    try:
+        return get_type_hints(handler, globalns=getattr(handler, "__globals__", {}), localns=localns)
+    except Exception:
+        return getattr(handler, "__annotations__", {})
+
+
+def _get_annotation(handler: Callable[..., Any], name: str, param: inspect.Parameter) -> Any:
+    return _handler_type_hints(handler).get(name, param.annotation)
 
 
 def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
     """Coerce a JSON value to the annotated Python type."""
     if annotation is inspect.Signature.empty:
         return value
+    if isinstance(annotation, str):
+        builtin = {"str": str, "int": int, "float": float, "bool": bool, "list": list, "dict": dict}.get(annotation)
+        if builtin is not None:
+            annotation = builtin
+        else:
+            return value
 
     # Handle typing generics (e.g., list[str], dict[str, int])
     origin = getattr(annotation, "__origin__", None)
@@ -82,13 +108,8 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
                 return annotation(value)
             return annotation(value)
         # datetime
-        if annotation is datetime or (inspect.isclass(annotation) and issubclass(annotation, datetime)):
-            try:
-                from datetime import datetime as dt
-                if annotation is dt:
-                    return _DATETIME_ADAPTER.validate_python(value)
-            except Exception:
-                pass
+        if annotation is datetime.datetime or (inspect.isclass(annotation) and issubclass(annotation, datetime.datetime)):
+            return _DATETIME_ADAPTER.validate_python(value)
         # Literal
         literals = getattr(annotation, "__values__", None)
         if literals is not None:
@@ -98,7 +119,7 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
         try:
             return TypeAdapter(annotation).validate_python(value)
         except ValidationError:
-            raise ValueError(f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}")
+            raise ValueError(f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}") from None
 
     return value
 
@@ -109,11 +130,9 @@ SSE_HEADERS: dict[str, str] = {
     "Connection": "keep-alive",
 }
 ProviderFactory = Callable[[], LLMProvider]
-LifecycleCallback = Callable[[], None]
-AcceptCallback = Callable[[], bool]
 
 
-class AgentRoute:
+class AgentRoute(BaseRoute):
     def __init__(
         self,
         path: str,
@@ -134,78 +153,36 @@ class AgentRoute:
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
     ) -> None:
-        self.path = path
-        self.handler = handler
+        super().__init__(
+            path=path,
+            handler=handler,
+            memory=memory,
+            on_stream_start=on_stream_start,
+            on_stream_end=on_stream_end,
+            should_accept=should_accept,
+            log_usage=log_usage,
+            required_api_key=required_api_key,
+            path_params=path_params,
+            cors=cors,
+            dependencies=dependencies,
+        )
         self.tools = tools or []
         self.llm_config = llm_config
         self.agent_config = agent_config
-        self.memory = memory
         self.provider_factory = provider_factory
         self.heartbeat_secs = heartbeat_secs
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
         self.system = system
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        """Build CORS headers from route-level cors config."""
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        allow_methods = self.cors.get("allow_methods", ["POST"])
-        if isinstance(allow_methods, str):
-            allow_methods = [allow_methods]
-        headers["Access-Control-Allow-Methods"] = ", ".join(allow_methods)
-        allow_headers = self.cors.get("allow_headers", ["Content-Type", "Authorization", "X-Session-Id"])
-        if isinstance(allow_headers, str):
-            allow_headers = [allow_headers]
-        headers["Access-Control-Allow-Headers"] = ", ".join(allow_headers)
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        """Run dependency callables, injecting results into request state."""
-        from starlette.datastructures import URL
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        # Extract path parameters from the request
-        path_kwargs = {}
-        if self.path_params:
-            # Starlette stores path parameters in request.path_params
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         try:
-            body: Any = await request.json()
+            body: Any = await read_json_body(request)
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
         if not isinstance(body, dict):
@@ -216,7 +193,7 @@ class AgentRoute:
 
         session_id = request.headers.get("X-Session-Id") or str(uuid.uuid4())
         try:
-            handler_kwargs = self._build_kwargs(body, message, session_id, path_kwargs)
+            handler_kwargs = self._build_kwargs(body, message, session_id, path_kwargs, request)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers()}
@@ -235,7 +212,7 @@ class AgentRoute:
                 result = self.handler(**handler_kwargs)
                 if inspect.isawaitable(result):
                     await result
-                history = await self.memory.load(session_id)
+                history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config)
                 async for sse in agent_loop.run(message, history=history, system=self.system):
                     await put_sse(sse)
@@ -243,11 +220,11 @@ class AgentRoute:
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                message_out = "Internal server error" if os.environ.get("YOMAI_ENV") == "production" else str(exc)
-                await put_sse(await sse_error(message_out, exc.__class__.__name__))
+                message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
+                await put_sse(sse_error(message_out, exc.__class__.__name__))
             finally:
                 if completed and agent_loop is not None:
-                    await self.memory.save(session_id, message, agent_loop.last_reply)
+                    await self.memory.save(session_id, message, agent_loop.last_reply)  # type: ignore[union-attr]
                 await queue.put(None)
 
         async def generate() -> AsyncIterator[str]:
@@ -260,7 +237,7 @@ class AgentRoute:
                 while True:
                     if time.monotonic() - started_at > self.agent_config.timeout_secs:
                         agent_task.cancel()
-                        timeout_sse = await sse_error("Agent request timed out", "timeout")
+                        timeout_sse = sse_error("Agent request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
                         yield timeout_sse
@@ -287,27 +264,27 @@ class AgentRoute:
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
     def _build_kwargs(
-        self, body: dict[str, Any], message: str, session_id: str, path_kwargs: dict[str, Any]
+        self, body: dict[str, Any], message: str, session_id: str, path_kwargs: dict[str, Any], request: Request | None = None
     ) -> dict[str, Any]:
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
-            if name == "session_id":
+            if name in path_kwargs:
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
+            elif name == "session_id":
                 kwargs[name] = session_id
             elif name == "message":
                 kwargs[name] = message
             elif name == "request":
-                continue  # request is handled via dependencies
-            elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = request
             elif name in body:
-                kwargs[name] = _coerce_value(body[name], param.annotation, name)
+                kwargs[name] = _coerce_value(body[name], _get_annotation(self.handler, name, param), name)
             elif param.default is inspect.Signature.empty:
                 raise ValueError(f"Missing required agent field: {name}")
         return kwargs
 
 
-class WorkflowRoute:
+class WorkflowRoute(BaseRoute):
     def __init__(
         self,
         path: str,
@@ -323,68 +300,31 @@ class WorkflowRoute:
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
     ) -> None:
-        self.path = path
-        self.handler = handler
+        super().__init__(
+            path=path,
+            handler=handler,
+            memory=memory,
+            on_stream_start=on_stream_start,
+            on_stream_end=on_stream_end,
+            should_accept=should_accept,
+            log_usage=log_usage,
+            required_api_key=required_api_key,
+            path_params=path_params,
+            cors=cors,
+            dependencies=dependencies,
+        )
         self.app = app
-        self.memory = memory
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        allow_methods = self.cors.get("allow_methods", ["POST"])
-        if isinstance(allow_methods, str):
-            allow_methods = [allow_methods]
-        headers["Access-Control-Allow-Methods"] = ", ".join(allow_methods)
-        allow_headers = self.cors.get("allow_headers", ["Content-Type", "Authorization", "X-Session-Id"])
-        if isinstance(allow_headers, str):
-            allow_headers = [allow_headers]
-        headers["Access-Control-Allow-Headers"] = ", ".join(allow_headers)
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         try:
-            body: Any = await request.json()
+            body: Any = await read_json_body(request)
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
         if not isinstance(body, dict):
@@ -402,19 +342,19 @@ class WorkflowRoute:
 
         async def run_workflow() -> None:
             try:
-                runner = WorkflowRunner(queue, session_id, self.memory, self.app)
-                kwargs = self._build_kwargs(body, runner, path_kwargs)
+                runner = WorkflowRunner(queue, session_id, self.memory, self.app)  # type: ignore[arg-type]
+                kwargs = self._build_kwargs(body, runner, path_kwargs, request)
                 result = self.handler(**kwargs)
                 if inspect.isawaitable(result):
                     result = await result
                 await put_sse(sse_result(result if result is not None else ""))
-                await put_sse(await sse_done())
+                await put_sse(sse_done())
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                message_out = "Internal server error" if os.environ.get("YOMAI_ENV") == "production" else str(exc)
-                await put_sse(await sse_error(message_out, exc.__class__.__name__))
-                await put_sse(await sse_done())
+                message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
+                await put_sse(sse_error(message_out, exc.__class__.__name__))
+                await put_sse(sse_done())
             finally:
                 await queue.put(None)
 
@@ -428,7 +368,7 @@ class WorkflowRoute:
                 while True:
                     if time.monotonic() - started_at > self.app.config.streaming.max_duration_secs:
                         task.cancel()
-                        timeout_sse = await sse_error("Workflow request timed out", "timeout")
+                        timeout_sse = sse_error("Workflow request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
                         yield timeout_sse
@@ -455,7 +395,7 @@ class WorkflowRoute:
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
     def _build_kwargs(
-        self, body: dict[str, Any], runner: WorkflowRunner, path_kwargs: dict[str, Any]
+        self, body: dict[str, Any], runner: WorkflowRunner, path_kwargs: dict[str, Any], request: Request | None = None
     ) -> dict[str, Any]:
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
@@ -463,96 +403,39 @@ class WorkflowRoute:
             if name == "runner":
                 kwargs[name] = runner
             elif name == "request":
-                continue
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
             elif name in body:
-                kwargs[name] = _coerce_value(body[name], param.annotation, name)
+                kwargs[name] = _coerce_value(body[name], _get_annotation(self.handler, name, param), name)
             elif param.default is inspect.Signature.empty:
                 raise ValueError(f"Missing required workflow field: {name}")
         return kwargs
 
 
-class GetRoute:
+class GetRoute(BaseRoute):
     """Non-streaming GET handler for reading data (e.g., session history)."""
 
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any],
-        memory: MemoryBackend,
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        log_usage: bool = True,
-        required_api_key: str = "",
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.memory = memory
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
-
     async def handle(self, request: Request) -> JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
             if name == "request":
-                continue
-            elif name == "session_id":
-                session_id = request.headers.get("X-Session-Id", "")
-                kwargs[name] = session_id
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
+            elif name == "session_id" and "session_id" not in path_kwargs:
+                # Only use header-based session_id if not a path parameter
+                kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in request.query_params:
-                kwargs[name] = _coerce_value(request.query_params[name], param.annotation, name)
+                kwargs[name] = _coerce_value(request.query_params[name], _get_annotation(self.handler, name, param), name)
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -566,84 +449,29 @@ class GetRoute:
         return JSONResponse(result, headers=headers)
 
 
-class DeleteRoute:
+class DeleteRoute(BaseRoute):
     """Non-streaming DELETE handler (e.g., clear session)."""
 
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any],
-        memory: MemoryBackend,
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        log_usage: bool = True,
-        required_api_key: str = "",
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.memory = memory
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
-
     async def handle(self, request: Request) -> JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
             if name == "request":
-                continue
-            elif name == "session_id":
-                session_id = request.headers.get("X-Session-Id", "")
-                kwargs[name] = session_id
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
+            elif name == "session_id":
+                # Use header-based session_id if not a path parameter
+                kwargs[name] = request.headers.get("X-Session-Id", "")
+            elif name in request.query_params:
+                kwargs[name] = _coerce_value(request.query_params[name], _get_annotation(self.handler, name, param), name)
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -657,58 +485,26 @@ class DeleteRoute:
         return JSONResponse(result, headers=headers)
 
 
-class HeadRoute:
+class HeadRoute(BaseRoute):
     """HEAD endpoint (e.g., check session exists)."""
-
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any],
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
 
     async def handle(self, request: Request) -> Response:
         from starlette.responses import Response
 
-        if self.should_accept is not None and not self.should_accept():
-            return Response(status_code=503)
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
             if name == "request":
-                continue
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -716,90 +512,25 @@ class HeadRoute:
         if inspect.isawaitable(result):
             result = await result
 
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-
+        headers = self._cors_headers()
         if isinstance(result, Response):
             return result
         return Response(status_code=200, headers=headers)
 
 
-class PatchRoute:
+class PatchRoute(BaseRoute):
     """Non-streaming PATCH handler for partial updates."""
 
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any],
-        memory: MemoryBackend,
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        log_usage: bool = True,
-        required_api_key: str = "",
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.memory = memory
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
-
     async def handle(self, request: Request) -> JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         try:
-            body: Any = await request.json()
+            body: Any = await read_json_body(request)
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
         if not isinstance(body, dict):
@@ -809,14 +540,14 @@ class PatchRoute:
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
             if name == "request":
-                continue
-            elif name == "session_id":
-                session_id = request.headers.get("X-Session-Id", "")
-                kwargs[name] = session_id
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
+            elif name == "session_id":
+                # Use header-based session_id if not a path parameter
+                kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in body:
-                kwargs[name] = _coerce_value(body[name], param.annotation, name)
+                kwargs[name] = _coerce_value(body[name], _get_annotation(self.handler, name, param), name)
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -830,76 +561,19 @@ class PatchRoute:
         return JSONResponse(result, headers=headers)
 
 
-class PutRoute:
+class PutRoute(BaseRoute):
     """Non-streaming PUT handler for full replacement."""
 
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any],
-        memory: MemoryBackend,
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        log_usage: bool = True,
-        required_api_key: str = "",
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.memory = memory
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.log_usage = log_usage
-        self.required_api_key = required_api_key
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
-
-    def _cors_headers(self) -> dict[str, str]:
-        if not self.cors:
-            return {}
-        headers = {}
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
-        if self.cors.get("allow_credentials"):
-            headers["Access-Control-Allow-Credentials"] = "true"
-        return headers
-
-    async def _run_dependencies(self, request: Request, path_kwargs: dict[str, Any]) -> None:
-        request._yomai_path_kwargs = path_kwargs
-        for dep in self.dependencies:
-            if hasattr(dep, "callable"):
-                result = dep.callable(request)
-                if inspect.isawaitable(result):
-                    result = await result
-
     async def handle(self, request: Request) -> JSONResponse:
-        if self.should_accept is not None and not self.should_accept():
-            return JSONResponse({"error": "Server is shutting down"}, status_code=503)
-        if self.required_api_key:
-            auth = request.headers.get("Authorization", "")
-            expected = f"Bearer {self.required_api_key}"
-            if not hmac.compare_digest(auth, expected):
-                return JSONResponse({"error": "Invalid or missing API key"}, status_code=401)
+        auth_error = await self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
 
-        path_kwargs = {}
-        if self.path_params:
-            for param_name in self.path_params:
-                value = request.path_params.get(param_name)
-                if value is not None:
-                    path_kwargs[param_name] = value
-
+        path_kwargs = self._extract_path_kwargs(request)
         await self._run_dependencies(request, path_kwargs)
 
         try:
-            body: Any = await request.json()
+            body: Any = await read_json_body(request)
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
         if not isinstance(body, dict):
@@ -909,14 +583,14 @@ class PutRoute:
         kwargs: dict[str, Any] = {}
         for name, param in signature.parameters.items():
             if name == "request":
-                continue
-            elif name == "session_id":
-                session_id = request.headers.get("X-Session-Id", "")
-                kwargs[name] = session_id
+                kwargs[name] = request
             elif name in path_kwargs:
-                kwargs[name] = _coerce_value(path_kwargs[name], param.annotation, name)
+                kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
+            elif name == "session_id":
+                # Use header-based session_id if not a path parameter
+                kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in body:
-                kwargs[name] = _coerce_value(body[name], param.annotation, name)
+                kwargs[name] = _coerce_value(body[name], _get_annotation(self.handler, name, param), name)
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -930,28 +604,8 @@ class PutRoute:
         return JSONResponse(result, headers=headers)
 
 
-class OptionsRoute:
+class OptionsRoute(BaseRoute):
     """OPTIONS endpoint for CORS preflight."""
-
-    def __init__(
-        self,
-        path: str,
-        handler: Callable[..., Any] | None,
-        on_stream_start: LifecycleCallback | None = None,
-        on_stream_end: LifecycleCallback | None = None,
-        should_accept: AcceptCallback | None = None,
-        path_params: set[str] | None = None,
-        cors: dict[str, Any] | None = None,
-        dependencies: list[Any] | None = None,
-    ) -> None:
-        self.path = path
-        self.handler = handler
-        self.on_stream_start = on_stream_start
-        self.on_stream_end = on_stream_end
-        self.should_accept = should_accept
-        self.path_params = path_params or set()
-        self.cors = cors or {}
-        self.dependencies = dependencies or []
 
     async def handle(self, request: Request) -> Response:
         from starlette.responses import Response

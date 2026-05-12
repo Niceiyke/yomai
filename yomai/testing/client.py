@@ -13,6 +13,9 @@ class YomaiTestClient:
         self.app = app
         self._transport = httpx.ASGITransport(app=cast(Any, app))
 
+    async def _client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=self._transport, base_url="http://testserver")
+
     async def stream(
         self,
         path: str,
@@ -46,10 +49,20 @@ class YomaiTestClient:
         if session_id is not None:
             headers["X-Session-Id"] = session_id
 
-        async with httpx.AsyncClient(transport=self._transport, base_url="http://testserver") as client:
+        async with await self._client() as client:
             response = await client.post(path, json=body, headers=headers)
             response.raise_for_status()
             return parse_sse(response.text)
+
+    async def post_json(
+        self,
+        path: str,
+        data: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        """Send JSON POST request and return raw response."""
+        async with await self._client() as client:
+            return await client.post(path, json=data, headers=headers or {})
 
 
 def parse_sse(raw: str) -> list[dict[str, Any]]:

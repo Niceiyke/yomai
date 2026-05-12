@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from yomai.config import DevConfig
-
 
 def build_openapi(
     routes_meta: list[dict[str, Any]],
@@ -22,7 +20,7 @@ def build_openapi(
         description = route.get("description", "")
         deprecated = route.get("deprecated", False)
         path_params = route.get("path_params", [])
-        body_params = route.get("body_params", [])
+        route.get("body_params", [])
         params = route.get("params", [])
 
         if route_type == "agent":

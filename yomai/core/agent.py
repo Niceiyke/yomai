@@ -5,7 +5,7 @@ import functools
 import inspect
 import time
 from collections.abc import AsyncGenerator
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, get_args, get_origin
 
 from yomai.config import AgentConfig, LLMConfig
 from yomai.llm.base import Done, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
@@ -66,10 +66,10 @@ class AgentLoop:
                 if isinstance(event, TextChunk):
                     content = self._maybe_strip_reasoning(event.content)
                     self.last_reply += content
-                    yield await sse_chunk(content)
+                    yield sse_chunk(content)
                 elif isinstance(event, ToolCall):
                     if iterations >= self.config.max_tool_calls:
-                        yield await sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
+                        yield sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
                         saw_tool_call = False
                         break
                     saw_tool_call = True
@@ -85,37 +85,42 @@ class AgentLoop:
 
             iterations += 1
 
-        yield await sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
-        yield await sse_done()
+        yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
+        yield sse_done()
 
     def _maybe_strip_reasoning(self, text: str) -> str:
         if not self.strip_reasoning:
             return text
+
+        if self._inside_reasoning:
+            text = "<think>" + text
+
         output: list[str] = []
-        i = 0
-        while i < len(text):
-            if not self._inside_reasoning and text.startswith("<think>", i):
+        pos = 0
+        while pos < len(text):
+            start = text.find("<think>", pos)
+            if start == -1:
+                output.append(text[pos:])
+                break
+            output.append(text[pos:start])
+            end = text.find("</think>", start + 7)
+            if end == -1:
                 self._inside_reasoning = True
-                i += len("<think>")
-            elif self._inside_reasoning and text.startswith("</think>", i):
-                self._inside_reasoning = False
-                i += len("</think>")
-            elif self._inside_reasoning:
-                i += 1
-            else:
-                output.append(text[i])
-                i += 1
+                break
+            self._inside_reasoning = False
+            pos = end + 8
+
         return "".join(output)
 
     async def _execute_tool_call(self, tool_call: ToolCall, messages: list[Message]) -> AsyncGenerator[str, None]:
         """Execute a tool immediately and stream tool_start/tool_end as soon as the call is observed."""
-        yield await sse_tool_start(tool_call.name, tool_call.args, tool_call.id)
+        yield sse_tool_start(tool_call.name, tool_call.args, tool_call.id)
         start = time.monotonic()
         result: Any
         fn = _registry.get(tool_call.name) if tool_call.name in self._tool_map else None
         if fn is None:
             result = f"Error: Unknown tool {tool_call.name!r}"
-            yield await sse_error(result, "unknown_tool")
+            yield sse_error(result, "unknown_tool")
         else:
             try:
                 signature = inspect.signature(fn)
@@ -130,14 +135,46 @@ class AgentLoop:
 
         duration_ms = int((time.monotonic() - start) * 1000)
         result_str = str(result)
-        yield await sse_tool_end(tool_call.id, result_str, duration_ms)
+        yield sse_tool_end(tool_call.id, result_str, duration_ms)
         messages.extend(self._tool_result_messages(tool_call, result_str))
 
     def _validate_tool_args(self, fn: ToolFunction, args: dict[str, Any]) -> None:
         hints = getattr(fn, "__annotations__", {})
         for name, value in args.items():
             expected = hints.get(name)
-            if expected in (str, int, float, bool, list, dict) and not isinstance(value, expected):
+            if expected is None:
+                continue
+
+            origin = get_origin(expected)
+            arg_types = get_args(expected)
+
+            # Generic list[T]
+            if origin is list and arg_types:
+                if not isinstance(value, list):
+                    raise TypeError(f"Tool argument {name!r} must be a list")
+                item_type = arg_types[0]
+                if isinstance(item_type, type):
+                    for item in value:
+                        if not isinstance(item, item_type):
+                            raise TypeError(f"Tool argument {name!r} items must be {item_type.__name__}")
+                continue
+
+            # Generic dict[K, V]
+            if origin is dict and len(arg_types) == 2:
+                if not isinstance(value, dict):
+                    raise TypeError(f"Tool argument {name!r} must be a dict")
+                continue
+
+            # Union / Optional[T]
+            if origin is not None and type(None) in arg_types:
+                if value is not None:
+                    non_none = [a for a in arg_types if a is not type(None)]
+                    if non_none and isinstance(non_none[0], type) and not isinstance(value, non_none[0]):
+                        raise TypeError(f"Tool argument {name!r} must be {non_none[0].__name__}")
+                continue
+
+            # Bare type
+            if isinstance(expected, type) and not isinstance(value, expected):
                 raise TypeError(f"Tool argument {name!r} must be {expected.__name__}")
 
     def _tool_result_messages(self, tool_call: ToolCall, result: str) -> list[Message]:

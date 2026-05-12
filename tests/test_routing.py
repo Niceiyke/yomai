@@ -1,19 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 import enum
 import uuid
-from datetime import datetime
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 from pydantic import BaseModel
 
-from yomai import Depends, RouteGroup, Yomai, tool
-from yomai.config import LLMConfig, MemoryConfig
-from yomai.testing import YomaiTestClient, mock_llm
-
+from yomai import Depends, RouteGroup, Yomai
+from yomai.config import AgentConfig, LLMConfig, MemoryConfig
+from yomai.core.agent import AgentLoop
+from yomai.testing import MockToolCall, YomaiTestClient, mock_llm
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Type coercion tests
@@ -147,9 +146,9 @@ async def test_optional_missing_param_uses_default() -> None:
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r = await client.get("/search?q=hello")
-    assert r.json()["limit"] == 10
-    r2 = await client.get("/search?q=hello&limit=5")
-    assert r2.json()["limit"] == 5
+        assert r.json()["limit"] == 10
+        r2 = await client.get("/search?q=hello&limit=5")
+        assert r2.json()["limit"] == 5
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -263,7 +262,7 @@ async def test_route_group_prefix_must_start_with_slash() -> None:
     v1 = RouteGroup("api/v1")  # missing leading slash
     try:
         app.include_router(v1)
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except Exception as e:
         assert "prefix" in str(e).lower()
 
@@ -485,3 +484,201 @@ async def test_options_returns_cors_headers() -> None:
     assert r.status_code == 200
     assert "Access-Control-Allow-Origin" in r.headers
     assert "Access-Control-Allow-Methods" in r.headers
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Request injection into handler kwargs
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_route_receives_request_object() -> None:
+    """A GET route with a `request: Request` parameter receives the request object."""
+    from starlette.requests import Request as StarletteRequest
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+    captured: dict[str, Any] = {}
+
+    @app.get("/inspect")
+    async def inspect(request: StarletteRequest) -> dict[str, Any]:
+        captured["method"] = request.method
+        captured["url_path"] = request.url.path
+        return {"ok": True}
+
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        r = await client.get("/inspect")
+    assert r.status_code == 200
+    assert captured["method"] == "GET"
+    assert captured["url_path"] == "/inspect"
+
+
+@pytest.mark.asyncio
+async def test_agent_route_receives_request_object() -> None:
+    """A POST agent route with a `request: Request` parameter receives the request."""
+    from starlette.requests import Request as StarletteRequest
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+    captured: dict[str, Any] = {}
+
+    @app.agent("/chat")
+    async def chat(message: str, request: StarletteRequest) -> None:
+        captured["method"] = request.method
+        captured["url_path"] = request.url.path
+
+    with mock_llm(["ok"]):
+        await YomaiTestClient(app).call("/chat", "hi")
+    assert captured["method"] == "POST"
+    assert captured["url_path"] == "/chat"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Request body size limit
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_request_body_size_limit() -> None:
+    """A POST body larger than 10 MB should be rejected with a 400 error."""
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/echo")
+    async def echo(message: str) -> None:
+        pass
+
+    transport = httpx.ASGITransport(app=cast(Any, app))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # Build a body larger than 10 MB (MAX_BODY_SIZE = 10 * 1024 * 1024)
+        # read_json_body raises ValueError("Request body too large") when exceeded.
+        large_body = b'{"message": "' + b"x" * (10 * 1024 * 1024) + b'"}'
+        r = await client.post("/echo", content=large_body)
+    assert r.status_code == 400
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool argument validation with generics (direct _validate_tool_args testing)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _make_agent_loop() -> AgentLoop:
+    """Create an AgentLoop instance suitable for testing _validate_tool_args."""
+    return AgentLoop(
+        provider=MagicMock(),
+        tools=[],
+        config=AgentConfig(),
+        llm_config=LLMConfig(api_key=""),
+    )
+
+
+def test_validate_tool_args_list_str() -> None:
+    """_validate_tool_args should enforce list[str] — reject non-list or wrong item types."""
+    loop = _make_agent_loop()
+
+    def get_items(items: list[str]) -> str:
+        return str(items)
+
+    # Set real type objects to bypass PEP 563 string annotations
+    get_items.__annotations__ = {"items": list[str], "return": str}
+
+    # Valid: actual list of strings
+    loop._validate_tool_args(get_items, {"items": ["a", "b"]})
+
+    # Invalid: not a list at all
+    with pytest.raises(TypeError, match="must be a list"):
+        loop._validate_tool_args(get_items, {"items": "not_a_list"})
+
+    # Invalid: list contains non-string items
+    with pytest.raises(TypeError, match="items must be str"):
+        loop._validate_tool_args(get_items, {"items": [1, 2, 3]})
+
+
+def test_validate_tool_args_optional_int() -> None:
+    """_validate_tool_args should handle Optional[int]: accept None or int, reject other."""
+    loop = _make_agent_loop()
+
+    def set_count(count: int | None = None) -> str:
+        return str(count)
+
+    # Set real type objects to bypass PEP 563 string annotations
+    set_count.__annotations__ = {"count": int | None, "return": str}
+
+    # Valid: None (optional with no value)
+    loop._validate_tool_args(set_count, {"count": None})
+
+    # Valid: actual int
+    loop._validate_tool_args(set_count, {"count": 42})
+
+    # Valid: zero
+    loop._validate_tool_args(set_count, {"count": 0})
+
+    # Invalid: string where int is expected
+    with pytest.raises(TypeError, match="must be int"):
+        loop._validate_tool_args(set_count, {"count": "not_an_int"})
+
+
+def test_validate_tool_args_dict_str_int() -> None:
+    """_validate_tool_args should enforce dict[str, int] — reject non-dict values."""
+    loop = _make_agent_loop()
+
+    def set_mapping(mapping: dict[str, int]) -> str:
+        return str(mapping)
+
+    # Set real type objects to bypass PEP 563 string annotations
+    set_mapping.__annotations__ = {"mapping": dict[str, int], "return": str}
+
+    # Valid: actual dict with str keys and int values
+    loop._validate_tool_args(set_mapping, {"mapping": {"x": 1, "y": 2}})
+
+    # Valid: empty dict
+    loop._validate_tool_args(set_mapping, {"mapping": {}})
+
+    # Invalid: not a dict at all
+    with pytest.raises(TypeError, match="must be a dict"):
+        loop._validate_tool_args(set_mapping, {"mapping": "not_a_dict"})
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tool argument validation with generics (integration via @tool + mock_llm)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_tool_arg_validation_integration() -> None:
+    """End-to-end: a tool with list[str], Optional[int], dict[str, int] validated at runtime.
+
+    Uses the ``@tool`` decorator and ``mock_llm`` to exercise the full
+    AgentLoop → _validate_tool_args pipeline.
+    """
+    from yomai import tool
+
+    @tool
+    def mytool(items: list[str], count: int | None = None) -> str:
+        return f"items={items!r}, count={count!r}"
+
+    # Override annotations with real type objects so _validate_tool_args
+    # can inspect them (PEP 563 stringifies annotations in this module).
+    mytool.__annotations__ = {"items": list[str], "count": int | None, "return": str}
+
+    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
+    @app.agent("/tools", tools=[mytool])
+    async def agent(message: str) -> None:
+        pass
+
+    # Correct args — tool should execute successfully
+    with mock_llm([
+        MockToolCall(name="mytool", args={"items": ["a", "b"], "count": 5}),
+    ]):
+        events = await YomaiTestClient(app).get_events("/tools", "hi")
+    tool_events = [e for e in events if e.get("type") == "tool_end"]
+    assert len(tool_events) == 1
+    assert "Error:" not in str(tool_events[0].get("result", ""))
+
+    # Wrong type for 'items' — should produce an error result
+    with mock_llm([
+        MockToolCall(name="mytool", args={"items": "not_a_list"}),
+    ]):
+        events = await YomaiTestClient(app).get_events("/tools", "hi")
+    tool_events = [e for e in events if e.get("type") == "tool_end"]
+    assert len(tool_events) == 1
+    assert "Error:" in str(tool_events[0].get("result", ""))
