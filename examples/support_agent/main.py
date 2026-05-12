@@ -1,11 +1,11 @@
 """Yomai Support Agent — production-ready customer support application.
 
 Start with:
-    uv run yomai run
-    # or:  uv run python -m examples.support-agent.main
+    uvicorn examples.support_agent.main:app --reload
+    # or:  uv run python -m examples.support_agent
 """
 from __future__ import annotations
-
+import os
 from yomai import Depends, HookEvent, Yomai, tool
 from yomai.config import (
     AgentConfig,
@@ -16,13 +16,15 @@ from yomai.config import (
     StreamingConfig,
 )
 
-from . import store as db
-from . import tools
+from examples.support_agent import store as db
+from examples.support_agent import tools
+from dotenv import load_dotenv
+load_dotenv()  # Load environment variables from .env file  
 
 # ── Application ────────────────────────────────────────────────────────
 
 app = Yomai(
-    llm=LLMConfig(provider="anthropic", max_tokens=1024),
+    llm=LLMConfig(provider="anthropic", model="MiniMax-M2.7", max_tokens=1024,api_key=os.environ.get("ANTHROPIC_API_KEY", ""), base_url=os.environ.get("ANTHROPIC_BASE_URL")),
     memory=MemoryConfig(backend="sqlite", db_path="support_sessions.db", max_messages=30, ttl_hours=48),
     agent=AgentConfig(max_tool_calls=8, timeout_secs=180),
     streaming=StreamingConfig(heartbeat_secs=15, max_duration_secs=300),
