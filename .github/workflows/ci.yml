@@ -7,13 +7,46 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: astral-sh/setup-uv@v5
-      - run: uv sync
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - run: uv sync --extra redis
+
       - run: uv run ruff check --output-format=github
       - run: uv run ruff format --check
       - run: uv run pyright
-      - run: uv run pytest -q
+
+      - name: Run tests with coverage
+        run: uv run pytest -q
+        env:
+          REDIS_URL: redis://localhost:6379/0
+
+      - name: Upload coverage to Codecov (optional)
+        if: matrix.python-version == '3.13'
+        uses: codecov/codecov-action@v5
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
       - run: uv build
+
       - run: ./scripts/install_smoke.sh
