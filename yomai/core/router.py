@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 
 from yomai import env
 from yomai._types import Request, read_json_body
+from yomai.auth import AuthBackend
 from yomai.config import AgentConfig, LLMConfig
 from yomai.core._base_route import AcceptCallback, BaseRoute, LifecycleCallback
 from yomai.core.agent import AgentLoop
@@ -152,6 +153,7 @@ class AgentRoute(BaseRoute):
         path_params: set[str] | None = None,
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
+        auth: AuthBackend | None = None,
     ) -> None:
         super().__init__(
             path=path,
@@ -165,6 +167,7 @@ class AgentRoute(BaseRoute):
             path_params=path_params,
             cors=cors,
             dependencies=dependencies,
+            auth=auth,
         )
         self.tools = tools or []
         self.llm_config = llm_config
@@ -302,6 +305,7 @@ class WorkflowRoute(BaseRoute):
         path_params: set[str] | None = None,
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
+        auth: AuthBackend | None = None,
     ) -> None:
         super().__init__(
             path=path,
@@ -315,6 +319,7 @@ class WorkflowRoute(BaseRoute):
             path_params=path_params,
             cors=cors,
             dependencies=dependencies,
+            auth=auth,
         )
         self.app = app
 

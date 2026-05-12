@@ -22,6 +22,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 
 from yomai import env
 from yomai._types import Request, read_json_body
+from yomai.auth import AuthBackend, NoAuth
 from yomai.config import (
     AgentConfig,
     BudgetConfig,
@@ -221,6 +222,7 @@ class Yomai:
         rate_limits: RateLimitConfig | None = None,
         budgets: BudgetConfig | None = None,
         dev: DevConfig | None = None,
+        auth: AuthBackend | None = None,
     ) -> None:
         self.config = Config(
             llm=llm or LLMConfig(),
@@ -233,6 +235,7 @@ class Yomai:
             dev=dev or DevConfig(),
         )
         _setup_logging()
+        self._auth = auth or NoAuth()
         self.memory: MemoryBackend = self._build_memory(self.config.memory)
         self.jobs = self._build_job_store()
         self.job_events = self._build_job_event_store()
@@ -539,7 +542,7 @@ class Yomai:
                     runner = WorkflowRunner(queue, session_id, self.memory, self, job_id=job_id)
                     from yomai.core.router import WorkflowRoute
 
-                    route = WorkflowRoute(path, handler, self, self.memory)
+                    route = WorkflowRoute(path, handler, self, self.memory, auth=self._auth)
                     kwargs = route._build_kwargs(body, runner, path_kwargs, session_id=session_id)
                     result = handler(**kwargs)
                     if inspect.isawaitable(result):
@@ -693,6 +696,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
@@ -885,6 +889,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
@@ -945,6 +950,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["GET"]))
             self._paths.add(path)
@@ -1001,6 +1007,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["DELETE"]))
             self._paths.add(path)
@@ -1133,6 +1140,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["PUT"]))
             self._paths.add(path)
@@ -1189,6 +1197,7 @@ class Yomai:
                 path_params,
                 cors or {},
                 dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["PATCH"]))
             self._paths.add(path)

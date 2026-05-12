@@ -4,12 +4,15 @@ from __future__ import annotations
 import hmac
 import inspect
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from starlette.responses import JSONResponse
 
 from yomai._types import Request
 from yomai.memory import MemoryBackend
+
+if TYPE_CHECKING:
+    from yomai.auth import AuthBackend
 
 LifecycleCallback = Callable[[], None]
 AcceptCallback = Callable[[], bool]
@@ -31,6 +34,7 @@ class BaseRoute:
         path_params: set[str] | None = None,
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
+        auth: AuthBackend | None = None,
     ) -> None:
         self.path = path
         self.handler = handler
@@ -43,6 +47,7 @@ class BaseRoute:
         self.path_params = path_params or set()
         self.cors = cors or {}
         self.dependencies = dependencies or []
+        self.auth = auth
 
     def _cors_headers(self) -> dict[str, str]:
         """Build CORS headers from route-level cors config."""
@@ -81,6 +86,16 @@ class BaseRoute:
         """Return error response if auth fails or server is draining, else None."""
         if self.should_accept is not None and not self.should_accept():
             return JSONResponse({"error": "Server is shutting down"}, status_code=503)
+
+        # Custom auth backend (skip NoAuth — it's the sentinel for "no auth required")
+        if self.auth is not None and type(self.auth).__name__ != "NoAuth":
+            result = await self.auth.authenticate(request)
+            if result is None:
+                return JSONResponse({"error": "Authentication required"}, status_code=401)
+            request.state.yomai_auth = result
+            return None
+
+        # Legacy API key check
         if self.required_api_key:
             auth = request.headers.get("Authorization", "")
             expected = f"Bearer {self.required_api_key}"
