@@ -215,14 +215,26 @@ class AgentRoute(BaseRoute):
         async def run_agent() -> None:
             agent_loop: AgentLoop | None = None
             try:
-                result = self.handler(**handler_kwargs)
-                if inspect.isawaitable(result):
-                    await result
+                handler_result = self.handler(**handler_kwargs)
+                if inspect.isawaitable(handler_result):
+                    handler_result = await handler_result
+
+                # Handler can return a dict to dynamically override system/context/message
+                system = self.system
+                user_message = message
+                if isinstance(handler_result, dict):
+                    if handler_result.get("system"):
+                        system = str(handler_result["system"])
+                    if handler_result.get("context"):
+                        user_message = f"{handler_result['context']}\n\n---\n{message}"
+                    if handler_result.get("message"):
+                        user_message = str(handler_result["message"])
+
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
                     budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id,
                     hooks=getattr(self, '_hooks', None))
-                async for sse in agent_loop.run(message, history=history, system=self.system):
+                async for sse in agent_loop.run(user_message, history=history, system=system):
                     await put_sse(sse)
             except asyncio.CancelledError:
                 raise

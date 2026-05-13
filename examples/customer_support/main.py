@@ -117,16 +117,24 @@ def create_support_ticket(customer_email: str, category: str, summary: str, prio
 # Agents
 # ---------------------------------------------------------------------------
 
-@app.agent("/specialist/billing", system="You are a billing support specialist. Help with invoices, payments, refunds, and subscriptions. Use faq_lookup first. If the customer's issue is resolved, summarize. If the customer needs a refund over $100, create a support ticket for human review. Be concise and friendly.", tools=[faq_lookup, get_order, create_support_ticket])
-async def billing_specialist(message: str, session_id: str) -> None:
-    # Handler runs BEFORE the LLM. Use it for:
-    #   1. Validation — block abusive/spam messages
-    #   2. Pre-processing — inject customer context
-    #   3. Authorization — check rate limits, permissions
-    #   4. Side effects — log, audit, increment counters
+@app.agent("/specialist/billing", system="You are a billing support specialist.", tools=[faq_lookup, get_order, create_support_ticket])
+async def billing_specialist(message: str, session_id: str, request=None):
+    """Handler can return a dict to dynamically override system, context, or message."""
+    # Simulate looking up customer data
+    user = {"name": "Alice", "plan": "premium", "orders": 12}
+
     if not message or len(message) < 3:
         raise ValueError("Message too short")
-    # The LLM runs automatically after this function returns
+
+    # Return dict to inject dynamic system prompt + context
+    return {
+        "system": (
+            f"You are a billing specialist. The customer is {user['name']} "
+            f"on the {user['plan']} plan with {user['orders']} orders. "
+            "Be friendly and use their name."
+        ),
+        "context": f"Customer profile: name={user['name']}, plan={user['plan']}",
+    }
 
 
 @app.agent("/specialist/technical", system="You are a technical support specialist. Help with login issues, app crashes, bugs, and errors. Use faq_lookup with category='technical' for known solutions. If you cannot resolve the issue, recommend creating a support ticket. Be concise and helpful.", tools=[faq_lookup])
