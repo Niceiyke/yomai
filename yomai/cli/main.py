@@ -8,6 +8,7 @@ from typing import Any
 import typer
 
 from yomai import env
+from yomai._version import __version__ as _yomai_version
 
 app = typer.Typer(help="Yomai development CLI")
 
@@ -49,14 +50,33 @@ def new(project_name: str) -> None:
 
 
 @app.command()
-def run(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
-    """Run `main:app` with Yomai-aware output."""
+def run(
+    app_path: str = "main:app",
+    host: str = "0.0.0.0",
+    port: int = 8000,
+    reload: bool = True,
+) -> None:
+    """Run a Yomai app with dev server and playground.
+
+    app_path format: module:attribute (e.g. 'main:app', 'app:app', 'myapp:server')
+    """
     host = os.environ.get("HOST", host)
     port = int(os.environ.get("PORT", port))
-    module = importlib.import_module("main")
-    yomai_app: Any = module.app
+
+    module_name, _, attr = app_path.partition(":")
+    if not module_name or not attr:
+        module_name = app_path
+        attr = "app"
+
+    # Ensure the current directory is on the import path
+    import sys
+    sys.path.insert(0, os.getcwd())
+
+    module = importlib.import_module(module_name)
+    yomai_app: Any = getattr(module, attr)
     routes = getattr(yomai_app, "_routes_meta", [])
-    typer.echo(f"\n  Yomai v0.1.0  ·  http://localhost:{port}")
+
+    typer.echo(f"\n  Yomai v{_yomai_version}  ·  http://localhost:{port}")
     if env.YOMAI_ENV != "production":
         typer.echo(f"  Playground  →  http://localhost:{port}/__yomai__")
     typer.echo("\n  Routes")
@@ -68,7 +88,7 @@ def run(host: str = "0.0.0.0", port: int = 8000, reload: bool = True) -> None:
 
     import uvicorn
 
-    uvicorn.run("main:app", host=host, port=port, reload=reload)
+    uvicorn.run(f"{module_name}:{attr}", host=host, port=port, reload=reload)
 
 
 @app.command()
