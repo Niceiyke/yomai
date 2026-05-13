@@ -72,6 +72,13 @@ def run(
     import sys
     sys.path.insert(0, os.getcwd())
 
+    # Auto-load .env if python-dotenv is available
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     module = importlib.import_module(module_name)
     yomai_app: Any = getattr(module, attr)
     routes = getattr(yomai_app, "_routes_meta", [])
@@ -129,6 +136,13 @@ def serve(
 ) -> None:
     """Production-grade server — multi-worker, no reload, proxy headers."""
     import uvicorn
+
+    # Auto-load .env
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
 
     host = os.environ.get("HOST", host)
     port = int(os.environ.get("PORT", port))
