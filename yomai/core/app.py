@@ -267,6 +267,8 @@ class Yomai:
         self._route_groups: list[RouteGroup] = []
         self._starlette = Starlette(
             routes=[
+                Route("/docs", self._api_docs, methods=["GET"]),
+                Route("/__yomai__/docs", self._api_docs, methods=["GET"]),
                 Route("/dev", self._playground, methods=["GET"]),
                 Route("/__yomai__", self._playground, methods=["GET"]),
                 Route("/__yomai__/", self._playground, methods=["GET"]),
@@ -334,6 +336,25 @@ class Yomai:
                 prefix=cfg.prefix,
             )
         raise YomaiConfigError(f"Unknown memory backend: {cfg.backend!r}")
+
+    _API_DOCS_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Yomai API Docs</title>
+  <style>body{margin:0;background:#0b0f17}</style>
+</head>
+<body>
+  <script id="api-reference" data-url="/__yomai__/openapi.json"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference@1"></script>
+</body>
+</html>"""
+
+    async def _api_docs(self, request: Request) -> HTMLResponse:
+        if env.YOMAI_ENV == "production" and not self.config.dev.api_key:
+            return HTMLResponse("<h1>API docs disabled in production</h1>", status_code=404)
+        return HTMLResponse(self._API_DOCS_HTML)
 
     async def _playground(self, request: Request) -> Response:
         if env.YOMAI_ENV == "production" or not self.config.dev.ui:
