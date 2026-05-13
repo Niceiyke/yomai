@@ -18,6 +18,7 @@ Complete reference for the public API surface of the Yomai framework. All classe
 8. [Testing](#8-testing)
 9. [Environment Variables](#9-environment-variables)
 10. [Jobs](#10-jobs)
+11. [Plugins](#11-plugins)
 
 ---
 
@@ -41,6 +42,7 @@ class Yomai:
         rate_limits: RateLimitConfig | None = None,
         budgets: BudgetConfig | None = None,
         dev: DevConfig | None = None,
+        plugins: list[PluginSetup | str] | None = None,
     ) -> None:
 ```
 
@@ -56,6 +58,7 @@ class Yomai:
 | `rate_limits` | `RateLimitConfig` | `RateLimitConfig()` | Per-session and global rate limits |
 | `budgets` | `BudgetConfig` | `BudgetConfig()` | Token and cost budgets with enforcement |
 | `dev` | `DevConfig` | `DevConfig()` | Development features (UI playground, logging, reload) |
+| `plugins` | `list[PluginSetup \| str]` | `None` | Plugin setup callables or module path strings. See [Plugins](#11-plugins). |
 
 **Example:**
 
@@ -1525,6 +1528,87 @@ In production (`YOMAI_ENV=production`), all metadata endpoints require `Authoriz
 
 ---
 
+## 11. Plugins
+
+Plugins are callables `setup(app: Yomai) -> None` that register hooks, middleware, or custom backends when the app starts.
+
+### `Yomai(plugins=[...])`
+
+Pass a list of setup callables or module path strings:
+
+```python
+app = Yomai(
+    plugins=[
+        my_setup_function,              # direct callable
+        "my_package.monitoring:setup",  # module path
+    ],
+)
+```
+
+Each plugin receives the fully-initialized `Yomai` instance.
+
+### `@plugin` decorator
+
+```python
+from yomai import plugin
+
+@plugin
+def setup(app):
+    app.hooks.on("agent.start", on_start)
+```
+
+Decorated functions are appended to `yomai.plugins._registry`. Load all registered plugins:
+
+```python
+from yomai.plugins import _registry
+app = Yomai(plugins=list(_registry))
+```
+
+### What plugins can do
+
+| Action | Code |
+|--------|------|
+| Register hooks | `app.hooks.on("agent.start", handler)` |
+| Add middleware | `app.add_middleware(CORSMiddleware, ...)` |
+| Modify config | `app.config.agent.max_tool_calls = 5` |
+| Register routes | `app.agent("/health")(handler)` |
+
+### OpenTelemetry plugin
+
+Bundled at `yomai.contrib.opentelemetry`:
+
+```python
+from yomai.contrib.opentelemetry import setup as otel
+
+app = Yomai(plugins=[otel])
+```
+
+Creates spans for `agent.run`, `tool.{name}`, and `llm.call` with attributes for tokens, duration, session ID, and errors. Requires `pip install opentelemetry-api opentelemetry-sdk`.
+
+### Writing a plugin
+
+```python
+# slack_notifier.py
+from yomai import Yomai, HookEvent
+
+def setup(app: Yomai) -> None:
+    async def on_agent_error(event: HookEvent) -> None:
+        await slack.post(f"Agent failed: {event.payload}")
+
+    app.hooks.on("agent.error", on_agent_error)
+```
+
+```python
+# main.py
+from slack_notifier import setup
+
+app = Yomai(plugins=[setup])
+```
+
+No plugin manifest, no YAML, no entry points — just `def setup(app): ...`.
+
+---
+
 ## Top-Level Package Exports
 
 For convenience, the following names are available from `from yomai import ...`:
@@ -1533,9 +1617,11 @@ For convenience, the following names are available from `from yomai import ...`:
 from yomai import (
     Yomai,            # Main application class
     tool,             # @tool decorator
+    plugin,           # @plugin decorator
     Depends,          # Dependency injection
     RouteGroup,       # Route grouping
     HookEvent,        # Hook event dataclass
+    PluginSetup,      # Plugin type alias
     # SSE utilities
     format_sse,
     sse_chunk,
