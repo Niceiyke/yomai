@@ -61,6 +61,28 @@ and streams back a natural language response.
 - The agent handler runs before the LLM loop (can validate inputs, load state)
 - Yomai manages the tool execution loop: LLM → tool call → result → LLM → response
 
+### Dynamic system prompts
+
+The handler can return a `dict` to override the system prompt or inject context at runtime:
+
+```python
+@app.agent("/personalized-chat", tools=[get_weather])
+async def personalized(message: str, session_id: str):
+    user = await load_user(session_id)  # DB lookup, API call, etc.
+
+    # Validate before spending tokens
+    if not message or len(message) < 3:
+        raise ValueError("Message too short")
+
+    # Return dict to personalize the LLM experience
+    return {
+        "system": f"You are a helpful assistant. The user is {user['name']} on the {user['plan']} plan.",
+        "context": f"User profile: {user}",
+    }
+```
+
+Return `None` (or don't return anything) to use the static `system=` from the decorator as-is.
+
 ## Step 2 — Add Memory for Session Persistence
 
 Yomai supports pluggable memory backends. Let's use SQLite:

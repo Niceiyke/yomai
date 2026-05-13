@@ -69,12 +69,34 @@ app = Yomai()
 
 ### `Yomai.agent(path, tools=None, *, system="", api_key=None, tags=None, summary=None, description=None, deprecated=False, cors=None, dependencies=None)`
 
-Decorator that registers a streaming agent endpoint (POST). The decorated function receives the user's `message`, a `session_id`, optional path parameters from the URL, optional extra body fields, and an optional `request` (Starlette `Request`). The function's body is executed before the LLM call, and can be used to set up context, validate input, or transform the message. History is automatically loaded and saved per session.
+Decorator that registers a streaming agent endpoint (POST). The decorated function runs **before** the LLM call and can validate input, load data, or return a dict to dynamically override the system prompt, inject context, or replace the user message.
 
 ```python
 @app.agent("/chat")
-async def chat(message: str, session_id: str) -> None:
+async def chat(message: str, session_id: str):
     return  # LLM call and SSE streaming handled automatically
+```
+
+**Handler return value:**
+
+If the handler returns a `dict`, the following keys are used to override the agent's runtime behavior:
+
+| Key | Type | Effect |
+|-----|------|--------|
+| `system` | `str` | Replaces the static `system=` prompt. Use for dynamic personalization. |
+| `context` | `str` | Text prepended above the user's message (separated by `---`). Use for injected facts. |
+| `message` | `str` | Fully replaces the user's message. |
+
+Return `None` (or don't return) to keep the static `system=` unchanged.
+
+```python
+@app.agent("/support", system="You are helpful.", tools=[faq])
+async def support(message: str, session_id: str):
+    user = db.get_user(session_id)
+    return {
+        "system": f"You are support. Customer: {user['name']} ({user['plan']}).",
+        "context": f"Profile: name={user['name']}, orders={user['orders']}",
+    }
 ```
 
 **Parameters:**

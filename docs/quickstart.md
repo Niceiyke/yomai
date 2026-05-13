@@ -16,8 +16,9 @@ async def get_weather(city: str) -> str:
 
 @app.agent("/chat", tools=[get_weather])
 async def chat(message: str, session_id: str, tone: str = "plain") -> None:
-    # The handler runs before the LLM loop. Use it for validation,
-    # request setup, logging, or reading extra body fields.
+    # The handler runs BEFORE the LLM. Return a dict to dynamically
+    # override the system prompt or inject context at runtime:
+    #   return {"system": "You are a pirate.", "context": "VIP user"}
     pass
 ```
 
