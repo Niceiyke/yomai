@@ -24,10 +24,16 @@ class BudgetState:
 
 
 class BudgetTracker:
-    """Per-session budget tracking.
+    """Per-session budget tracking for token count and estimated cost limits.
 
-    Checks limits after each LLM response and returns whether the request
-    should be stopped or continue with a warning.
+    Called after each LLM response to check whether token or cost thresholds
+    have been exceeded.  When ``on_exceeded`` is ``"stop"``, further LLM
+    calls in the session are blocked; ``"warn"`` logs a warning but allows
+    the conversation to continue.
+
+    Args:
+        config: :class:`BudgetConfig` defining per-request, per-session,
+            and daily limits for tokens and cost.
     """
 
     def __init__(self, config: BudgetConfig) -> None:

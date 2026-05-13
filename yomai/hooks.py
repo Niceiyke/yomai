@@ -21,6 +21,27 @@ HookHandler = Callable[[HookEvent], Awaitable[Any]]
 
 
 class HookRegistry:
+    """Registry for lifecycle event handlers.
+
+    Handlers registered via ``on()`` are invoked concurrently via
+    ``asyncio.gather`` when events are emitted.  Failures are logged
+    and accumulated in ``pop_failures()`` without affecting other
+    handlers or the main request flow.
+
+    ``emit_background()`` schedules handlers as a fire-and-forget
+    task — useful for telemetry, logging, or side-effects that should
+    not block the response.
+
+    Example::
+
+        hooks = HookRegistry()
+
+        @hooks.on("agent.done")
+        async def log_usage(event): ...
+
+        hooks.emit("agent.done", session_id="abc", tokens=42)
+    """
+
     def __init__(self) -> None:
         self._handlers: dict[str, list[HookHandler]] = defaultdict(list)
         self._failures: list[dict[str, Any]] = []

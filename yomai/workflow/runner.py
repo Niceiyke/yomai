@@ -80,9 +80,22 @@ class WorkflowRunner:
         retries: int = 0,
         backoff_secs: float = 1.0,
     ) -> str:
-        """Run a named agent step.  On success the agent's last reply is stored
-        in ``self.state[name]``.  Set *retries* > 0 to retry on failure with
-        exponential backoff starting at *backoff_secs*.
+        """Run a named agent step with checkpointing and state accumulation.
+
+        On success the agent's last reply is stored in ``self.state[name]``
+        and persisted as a checkpoint (if a job store is configured). Set
+        ``retries > 0`` to retry on failure with exponential backoff.
+
+        Args:
+            name: Unique step name used for state accumulation and graphing.
+            agent_fn: A ``@app.agent``-decorated function or any callable
+                that conforms to the agent handler signature.
+            input: The prompt passed to the agent.
+            retries: Number of retry attempts on failure.
+            backoff_secs: Base backoff in seconds (doubles each retry).
+
+        Returns:
+            The agent's last reply string.
         """
         await self.raise_if_cancelled()
         self._step_index += 1
@@ -144,6 +157,18 @@ class WorkflowRunner:
     # ------------------------------------------------------------------
 
     async def parallel(self, steps: list[Awaitable[Any]]) -> list[Any]:
+        """Run multiple steps concurrently via ``asyncio.gather``.
+
+        Each element should be the awaitable returned by calling an async
+        method (e.g. ``runner.step(...)``) without ``await``.  Results are
+        returned in the same order as the input list.
+
+        Example::
+
+            a = runner.step("fetch_users", users_agent, "top 10 users")
+            b = runner.step("fetch_orders", orders_agent, "recent orders")
+            results = await runner.parallel([a, b])
+        """
         parallel_id = f"parallel_{self._step_index + 1}"
         self._emit_graph_node(parallel_id, f"parallel ({len(steps)})", "parallel")
         results = list(await asyncio.gather(*steps))

@@ -101,7 +101,33 @@ class Depends:
 
 
 class RouteGroup:
-    """Route group for grouping agents/workflows under a prefix with shared config."""
+    """A group of routes sharing a URL prefix and inheritable configuration.
+
+    RouteGroup batches agent, workflow, and REST route registrations under a
+    common prefix. Settings such as ``tags``, ``cors``, and ``deprecated``
+    are inherited by every route in the group unless explicitly overridden.
+
+    Example::
+
+        v1 = RouteGroup(prefix="/v1", tags=["v1"], deprecated=True)
+
+        @v1.agent("/chat")
+        async def chat(session_id: str, message: str) -> str: ...
+
+        @v1.get("/history/{session_id}")
+        async def history(session_id: str) -> dict: ...
+
+    Routes registered via ``get()``, ``agent()``, and ``workflow()`` mirror
+    the corresponding methods on :class:`Yomai` but prepend the group prefix.
+
+    Args:
+        prefix: URL prefix applied to every route in the group
+            (e.g. ``"/v1"``). Must start with ``"/"`` or be empty.
+        tags: OpenAPI tags inherited by every route.
+        middleware: Optional per-group middleware stack.
+        cors: CORS configuration inherited by every route.
+        deprecated: Mark all routes in the group as deprecated by default.
+    """
 
     def __init__(
         self,
@@ -225,6 +251,31 @@ class RouteGroup:
 
 
 class Yomai:
+    """Main application class — the entry point for building Yomai apps.
+
+    Yomai provides a decorator-based API for defining AI agents, streaming
+    workflows, and REST endpoints (``@app.agent``, ``@app.workflow``,
+    ``@app.get``, etc.). Configuration is organised via a hierarchy of
+    Pydantic config models: ``LLMConfig``, ``MemoryConfig``,
+    ``AgentConfig``, ``StreamingConfig``, ``QueueConfig``,
+    ``RateLimitConfig``, ``BudgetConfig``, and ``DevConfig``. Built-in
+    endpoints include the playground (``/dev``), API docs (``/docs``),
+    health checks (``/__yomai__/health``), and metrics
+    (``/__yomai__/metrics``).
+
+    Args:
+        llm: LLM provider config (model, API key, base URL, etc.).
+        memory: Conversation memory backend config.
+        agent: Agent behaviour defaults (temperature, max steps, etc.).
+        streaming: SSE streaming settings (heartbeat, timeout).
+        queue: Job queue backend config (``inline``, ``swiftq``, ``none``).
+        rate_limits: Per-session rate limiting config.
+        budgets: Token / cost budget tracking config.
+        dev: Development-mode options (UI, logging, API key).
+        auth: Authentication backend (defaults to :class:`NoAuth`).
+        plugins: List of plugin setup callables or import paths.
+    """
+
     def __init__(
         self,
         llm: LLMConfig | None = None,
@@ -669,11 +720,16 @@ class Yomai:
         return None
 
     def on(self, name: str) -> Callable[[HookHandler], HookHandler]:
-        """Register a lifecycle hook.
+        """Register a lifecycle hook handler.
 
-        Example:
+        Hooks are emitted at lifecycle events: ``"agent.start"``,
+        ``"agent.done"``, ``"job.succeeded"``, ``"job.failed"``, etc.
+        Handlers run concurrently via ``asyncio.gather``.
+
+        Example::
+
             @app.on("job.succeeded")
-            async def on_done(event): ...
+            async def notify_slack(event): ...
         """
 
         def decorator(fn: HookHandler) -> HookHandler:
@@ -683,7 +739,12 @@ class Yomai:
         return decorator
 
     def include_router(self, group: RouteGroup) -> None:
-        """Include a route group, registering all agents and workflows."""
+        """Include a route group, registering all its agents and workflows.
+
+        Args:
+            group: A :class:`RouteGroup` whose routes will be registered
+                under the group's prefix with its inherited configuration.
+        """
         if group.prefix and not group.prefix.startswith("/"):
             raise YomaiRouteError("Route group prefix must start with '/' or be empty.")
         self._route_groups.append(group)
@@ -743,6 +804,27 @@ class Yomai:
         response_model: type[BaseModel] | None = None,
         guardrails: list[str] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a streaming LLM agent route (POST).
+
+        The handler receives the parsed request body fields as keyword
+        arguments (with coercion from JSON types). The handler's return
+        value is ignored; the agent streams its LLM conversation via SSE.
+
+        Args:
+            path: URL path (e.g. ``"/chat"``). May contain ``{param}`` segments.
+            tools: List of ``@tool``-decorated functions the agent may call.
+            system: System prompt prepended to every conversation.
+            api_key: Per-route API key override (falls back to dev config).
+            tags: OpenAPI tags for documentation grouping.
+            summary: Short OpenAPI summary string.
+            description: Longer OpenAPI description.
+            deprecated: Mark the endpoint as deprecated in OpenAPI.
+            cors: Per-route CORS configuration override.
+            dependencies: List of ``Depends`` callables to run before the handler.
+            response_model: Pydantic model for structured JSON output.
+                The LLM output is parsed as JSON and validated against this model.
+            guardrails: Regex patterns to strip from user messages (prompt injection).
+        """
         self._validate_new_path(path, method="POST")  # POST for agent
         path_params = self._extract_path_params(path)
 
@@ -820,6 +902,26 @@ class Yomai:
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        """Register a workflow orchestration route (POST).
+
+        The handler receives a ``WorkflowRunner`` instance injected as the
+        ``runner`` parameter. Use ``runner.step()``, ``runner.parallel()``,
+        ``runner.branch()``, ``runner.tool()``, ``runner.delegate()``, and
+        ``runner.approve()`` to build multi-step agent pipelines.
+
+        Args:
+            path: URL path.
+            mode: ``"stream"`` for real-time SSE output, ``"async"`` for
+                fire-and-forget via a job queue (returns 202 with ``job_id``).
+            max_retries: Number of retry attempts for async-mode workflows.
+            api_key: Per-route API key override.
+            tags: OpenAPI tags.
+            summary: Short OpenAPI summary.
+            description: Longer OpenAPI description.
+            deprecated: Mark as deprecated in OpenAPI.
+            cors: Per-route CORS override.
+            dependencies: ``Depends`` callables to run before the handler.
+        """
         if mode not in {"stream", "async"}:
             raise YomaiRouteError(
                 f"Unknown workflow mode {mode!r}.",
@@ -999,7 +1101,24 @@ class Yomai:
         dependencies: list[Depends] | None = None,
         response_model: type[BaseModel] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
-        """Non-streaming GET endpoint for reading data (e.g., session history)."""
+        """Register a non-streaming GET endpoint.
+
+        The handler receives path segments, query parameters, and injected
+        values (``request``, ``session_id``) as keyword arguments. Its return
+        value is serialized as JSON. If ``response_model`` is set, the return
+        value is validated against the Pydantic model.
+
+        Args:
+            path: URL path. May contain ``{param}`` path-parameter segments.
+            api_key: Per-route API key override.
+            tags: OpenAPI tags.
+            summary: Short OpenAPI summary.
+            description: Longer OpenAPI description.
+            deprecated: Mark as deprecated.
+            cors: CORS override.
+            dependencies: ``Depends`` callables.
+            response_model: Pydantic model for response validation and OpenAPI schema.
+        """
         self._validate_new_path(path, method="GET")
         path_params = self._extract_path_params(path)
 

@@ -16,6 +16,11 @@ class RegisteredTool(Protocol):
 
 
 def get_schemas_for_anthropic(tools: list[ToolFunction]) -> list[ToolSchema]:
+    """Format tool definitions in Anthropic's JSON schema format.
+
+    Each tool's schema is wrapped in an ``input_schema`` key as required
+    by the Anthropic Messages API.
+    """
     schemas: list[ToolSchema] = []
     for fn in tools:
         schema = getattr(fn, "schema", None)
@@ -36,6 +41,11 @@ def get_schemas_for_anthropic(tools: list[ToolFunction]) -> list[ToolSchema]:
 
 
 def get_schemas_for_openai(tools: list[ToolFunction]) -> list[ToolSchema]:
+    """Format tool definitions in OpenAI's function-calling JSON schema.
+
+    Each tool is wrapped as ``{"type": "function", "function": {...}}``
+    as required by the OpenAI Chat Completions API.
+    """
     schemas: list[ToolSchema] = []
     for fn in tools:
         schema = getattr(fn, "schema", None)

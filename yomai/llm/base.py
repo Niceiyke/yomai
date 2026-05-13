@@ -31,6 +31,18 @@ LLMEvent: TypeAlias = TextChunk | ToolCall | Done
 
 
 class LLMProvider(ABC):
+    """Abstract base for LLM streaming providers.
+
+    Implementations stream LLM responses as a sequence of typed events:
+    :class:`TextChunk` (incremental text), :class:`ToolCall` (parsed tool
+    invocation), and :class:`Done` (usage statistics).
+
+    Providers may optionally implement ``tool_schemas(tools)`` to format
+    tool definitions in the provider's native format, and
+    ``tool_result_messages(tool_call, result)`` to produce the follow-up
+    messages after tool execution.
+    """
+
     @abstractmethod
     def stream(
         self,

@@ -14,6 +14,19 @@ from typing import Any
 
 
 class ToolCache:
+    """In-memory LRU cache for deterministic ``@tool`` results.
+
+    Cache keys are built from ``(tool_name, MD5 of sorted args JSON)``.
+    Expired entries are evicted lazily on access; oldest entries are
+    evicted when the cache exceeds ``maxsize`` (default 10 000).
+
+    Each :class:`Yomai` instance owns its own ``ToolCache``, so cached
+    results do not leak across app instances.
+
+    Args:
+        maxsize: Maximum number of entries before oldest are evicted.
+    """
+
     DEFAULT_MAXSIZE = 10_000
 
     def __init__(self, maxsize: int = DEFAULT_MAXSIZE) -> None:

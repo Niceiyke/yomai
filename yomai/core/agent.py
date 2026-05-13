@@ -54,6 +54,24 @@ class ToolMessageProvider(Protocol):
 
 
 class AgentLoop:
+    """Orchestrates an LLM conversation loop with tool calling and budget tracking.
+
+    Invokes the configured LLM provider in a tool-calling loop, streaming
+    text chunks, tool calls, and usage statistics as SSE events via an
+    async generator. Enforces per-session budget limits and emits execution
+    graph events for visual tracing.
+
+    Args:
+        provider: An :class:`LLMProvider` instance (Anthropic, OpenAI, etc.).
+        tools: List of ``@tool``-decorated functions the agent may invoke.
+        config: :class:`AgentConfig` controlling max tool calls and timeout.
+        llm_config: :class:`LLMConfig` for cost estimation and reasoning stripping.
+        budget_tracker: Optional :class:`BudgetTracker` for cost/token limits.
+        session_id: Session identifier for budget and hook correlation.
+        hooks: Optional :class:`HookRegistry` for lifecycle event handlers.
+        tool_cache: Optional :class:`ToolCache` for deterministic result caching.
+    """
+
     def __init__(
         self,
         provider: LLMProvider,

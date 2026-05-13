@@ -1,3 +1,18 @@
+"""Yomai — a streaming-first framework for serving LLM agents over HTTP.
+
+Quick start::
+
+    from yomai import Yomai, tool
+    from yomai.config import LLMConfig
+
+    app = Yomai(llm=LLMConfig(provider="openai", model="gpt-4o-mini"))
+
+    @tool
+    def get_weather(city: str) -> str: ...
+
+    @app.agent("/chat", tools=[get_weather])
+    async def chat(message: str) -> None: ...
+"""
 from yomai.core.app import Depends, RouteGroup, Yomai
 from yomai.hooks import HookEvent
 from yomai.plugins import PluginSetup, plugin
