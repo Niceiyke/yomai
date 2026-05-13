@@ -119,14 +119,19 @@ def create_support_ticket(customer_email: str, category: str, summary: str, prio
 
 @app.agent("/specialist/billing", system="You are a billing support specialist. Help with invoices, payments, refunds, and subscriptions. Use faq_lookup first. If the customer's issue is resolved, summarize. If the customer needs a refund over $100, create a support ticket for human review. Be concise and friendly.", tools=[faq_lookup, get_order, create_support_ticket])
 async def billing_specialist(message: str, session_id: str) -> None:
-    pass
-
+    # Handler runs BEFORE the LLM. Use it for:
+    #   1. Validation — block abusive/spam messages
+    #   2. Pre-processing — inject customer context
+    #   3. Authorization — check rate limits, permissions
+    #   4. Side effects — log, audit, increment counters
+    if not message or len(message) < 3:
+        raise ValueError("Message too short")
+    # The LLM runs automatically after this function returns
 
 
 @app.agent("/specialist/technical", system="You are a technical support specialist. Help with login issues, app crashes, bugs, and errors. Use faq_lookup with category='technical' for known solutions. If you cannot resolve the issue, recommend creating a support ticket. Be concise and helpful.", tools=[faq_lookup])
 async def technical_specialist(message: str, session_id: str) -> None:
     pass
-
 
 
 @app.agent("/specialist/returns", system="You are a returns specialist. Help with return labels, return status, and exchange policies. Use faq_lookup with category='returns' and get_order to check order details. Be empathetic and efficient.", tools=[faq_lookup, get_order])
