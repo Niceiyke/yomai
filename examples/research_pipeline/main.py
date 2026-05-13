@@ -71,30 +71,26 @@ def check_plagiarism(text: str) -> dict[str, str]:
 
 @app.agent("/agents/researcher")
 async def researcher(message: str, session_id: str) -> None:
-    """You are a research analyst. Write comprehensive, factual research reports.
-    Cite sources where possible. Structure your output with clear sections:
-    Executive Summary, Background, Analysis, and Conclusions.
-    Be thorough and objective."""
+    pass
 
 
-@app.agent("/agents/fact-checker", tools=[word_count])
+
+@app.agent("/agents/fact-checker", system="You are a fact-checker. Review the provided text for factual accuracy. Flag any claims that need verification. Use word_count to check section lengths. Output format: VERIFIED or NEEDS_REVIEW, then list issues if any.", tools=[word_count])
 async def fact_checker(message: str, session_id: str) -> None:
-    """You are a fact-checker. Review the provided text for factual accuracy.
-    Flag any claims that need verification. Use word_count to check section lengths.
-    Output format: VERIFIED or NEEDS_REVIEW, then list issues if any."""
+    pass
 
 
-@app.agent("/agents/editor", tools=[word_count])
+
+@app.agent("/agents/editor", system="You are a senior editor. Review the draft for clarity, tone, structure, and grammar. Provide specific improvement suggestions. Output format: PASS or REVISION_NEEDED, then feedback.", tools=[word_count])
 async def editor(message: str, session_id: str) -> None:
-    """You are a senior editor. Review the draft for clarity, tone, structure, and grammar.
-    Provide specific improvement suggestions. Output format:
-    PASS or REVISION_NEEDED, then feedback."""
+    pass
+
 
 
 @app.agent("/agents/publisher")
 async def publisher(message: str, session_id: str) -> None:
-    """You are a publisher. Format the final approved content for publication.
-    Add a title, byline, date, and format as clean markdown."""
+    pass
+
 
 
 # ---------------------------------------------------------------------------

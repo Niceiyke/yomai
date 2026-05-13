@@ -23,6 +23,8 @@ from typing import Literal, cast
 from yomai import Yomai, tool
 from yomai.config import BudgetConfig, DevConfig, LLMConfig, MemoryConfig, RateLimitConfig
 from yomai.workflow import WorkflowRunner
+from dotenv import load_dotenv
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -115,27 +117,22 @@ def create_support_ticket(customer_email: str, category: str, summary: str, prio
 # Agents
 # ---------------------------------------------------------------------------
 
-@app.agent("/specialist/billing", tools=[faq_lookup, get_order, create_support_ticket])
+@app.agent("/specialist/billing", system="You are a billing support specialist. Help with invoices, payments, refunds, and subscriptions. Use faq_lookup first. If the customer's issue is resolved, summarize. If the customer needs a refund over $100, create a support ticket for human review. Be concise and friendly.", tools=[faq_lookup, get_order, create_support_ticket])
 async def billing_specialist(message: str, session_id: str) -> None:
-    """You are a billing support specialist. Help with invoices, payments, refunds, and subscriptions.
-    Use faq_lookup first. If the customer's issue is resolved, summarize.
-    If the customer needs a refund over $100, create a support ticket for human review.
-    Be concise and friendly."""
+    pass
 
 
-@app.agent("/specialist/technical", tools=[faq_lookup])
+
+@app.agent("/specialist/technical", system="You are a technical support specialist. Help with login issues, app crashes, bugs, and errors. Use faq_lookup with category='technical' for known solutions. If you cannot resolve the issue, recommend creating a support ticket. Be concise and helpful.", tools=[faq_lookup])
 async def technical_specialist(message: str, session_id: str) -> None:
-    """You are a technical support specialist. Help with login issues, app crashes, bugs, and errors.
-    Use faq_lookup with category='technical' for known solutions.
-    If you cannot resolve the issue, recommend creating a support ticket.
-    Be concise and helpful."""
+    pass
 
 
-@app.agent("/specialist/returns", tools=[faq_lookup, get_order])
+
+@app.agent("/specialist/returns", system="You are a returns specialist. Help with return labels, return status, and exchange policies. Use faq_lookup with category='returns' and get_order to check order details. Be empathetic and efficient.", tools=[faq_lookup, get_order])
 async def returns_specialist(message: str, session_id: str) -> None:
-    """You are a returns specialist. Help with return labels, return status, and exchange policies.
-    Use faq_lookup with category='returns' and get_order to check order details.
-    Be empathetic and efficient."""
+    pass
+
 
 
 # ---------------------------------------------------------------------------

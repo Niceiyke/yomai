@@ -109,48 +109,26 @@ def lint_diff(diff: str) -> dict[str, object]:
 
 @app.agent("/agents/security-reviewer")
 async def security_reviewer(message: str, session_id: str) -> None:
-    """You are a security auditor. Review code diffs for:
-    - SQL injection (string concatenation in queries)
-    - XSS vulnerabilities (unescaped user input)
-    - Insecure cryptography (weak algorithms, hardcoded keys)
-    - Authentication/authorization flaws
-    - Unsafe deserialization
+    pass
 
-    Output format:
-    CRITICAL / HIGH / MEDIUM / LOW : description."""
 
 
 @app.agent("/agents/style-reviewer")
 async def style_reviewer(message: str, session_id: str) -> None:
-    """You are a code style reviewer. Check for:
-    - Naming conventions (clear, consistent)
-    - Function length and complexity
-    - Code duplication
-    - Missing or misleading comments
-    - Error handling patterns
+    pass
 
-    Output format:
-    ISSUE : file:line : description : suggestion."""
 
 
 @app.agent("/agents/performance-reviewer")
 async def performance_reviewer(message: str, session_id: str) -> None:
-    """You are a performance engineer. Review code diffs for:
-    - N+1 query patterns
-    - Inefficient loops or algorithms
-    - Missing caching opportunities
-    - Resource leaks (unclosed connections, files)
-    - Large memory allocations
+    pass
 
-    Output format:
-    ISSUE : description : estimated impact (high/medium/low)."""
 
 
 @app.agent("/agents/synthesizer")
 async def synthesizer(message: str, session_id: str) -> None:
-    """You are a lead reviewer. Synthesize findings from security, style, and performance reviews.
-    Prioritize by severity. Provide an overall recommendation: APPROVE, CHANGES_REQUESTED, or COMMENT.
-    Include a summary table of findings grouped by category."""
+    pass
+
 
 
 # ---------------------------------------------------------------------------
