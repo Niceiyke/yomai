@@ -125,8 +125,19 @@ async def performance_reviewer(message: str, session_id: str) -> None:
 
 
 
-@app.agent("/agents/synthesizer")
+@app.agent("/agents/synthesizer",
+    system="You are a lead reviewer. Synthesize security, style, and performance findings. Prioritize by severity.",
+    guardrails=[
+        r"ignore (all |prior |previous )?(instructions|prompts|rules)",
+        r"you are now",
+        r"\[/INST\]",
+        r"<\|\w+\|>",
+    ],
+)
 async def synthesizer(message: str, session_id: str) -> None:
+    # Guardrails (regex patterns) run AFTER this handler, before the LLM sees the message.
+    # Injection attempts like "ignore all instructions" → "[filtered]" in the LLM's input.
+    pass
     pass
 
 
