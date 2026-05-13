@@ -1,5 +1,6 @@
 from yomai.core.app import Depends, RouteGroup, Yomai
 from yomai.hooks import HookEvent
+from yomai.plugins import PluginSetup, plugin
 
 # SSE utilities - for convenience when building streaming endpoints
 from yomai.streaming import (
@@ -40,5 +41,8 @@ __all__ = [
     "sse_graph_update",
     "sse_graph_clear",
     "sse_interrupt",
+    # Plugin system
+    "plugin",
+    "PluginSetup",
 ]
 __version__ = "0.2.0"

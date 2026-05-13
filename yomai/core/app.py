@@ -62,6 +62,7 @@ from yomai.metrics import registry as _metrics_registry
 from yomai.middleware.errors import ErrorMiddleware
 from yomai.middleware.logging import LoggingMiddleware
 from yomai.openapi.schema import build_openapi
+from yomai.plugins import PluginSetup, load_plugins
 from yomai.queue.base import QueuedWorkflow
 from yomai.streaming.sse import format_sse_with_id
 from yomai.tools.registry import ToolFunction
@@ -235,6 +236,7 @@ class Yomai:
         budgets: BudgetConfig | None = None,
         dev: DevConfig | None = None,
         auth: AuthBackend | None = None,
+        plugins: list[PluginSetup | str] | None = None,
     ) -> None:
         self.config = Config(
             llm=llm or LLMConfig(),
@@ -291,6 +293,10 @@ class Yomai:
         self._starlette.add_middleware(ErrorMiddleware)
         self._setup_signal_handlers()
         self._cors_config: dict[str, Any] = {}
+
+        # Load plugins
+        for setup in load_plugins(plugins):
+            setup(self)
 
     def _build_rate_limiter(self) -> InMemoryRateLimiter | RedisRateLimiter:
         if self.config.queue.backend == "swiftq" and self.config.queue.url:
