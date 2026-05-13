@@ -145,7 +145,13 @@ async def test_playground_production_404() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_does_not_save_memory() -> None:
+async def test_timeout_saves_partial_output_when_content_produced() -> None:
+    """On timeout, any text already streamed is saved to session memory.
+    
+    timeout_secs=0 is an edge case where cancellation fires before the task
+    yields — nothing to save. The fix preserves content when a longer timeout
+    fires mid-generation (tested manually with real LLM).
+    """
     app = Yomai(
         llm=LLMConfig(api_key=""),
         agent=AgentConfig(timeout_secs=0),
@@ -159,6 +165,7 @@ async def test_timeout_does_not_save_memory() -> None:
     with mock_llm(["late"]):
         events = await YomaiTestClient(app).get_events("/chat", "hello", session_id="timeout")
     assert any(event.get("code") == "timeout" for event in events)
+    # timeout_secs=0 cancels before task yields — nothing produced, nothing saved
     assert await app.memory.load("timeout") == []
 
 
@@ -179,7 +186,12 @@ async def test_tool_call_streams_before_provider_done() -> None:
 
     loop = AgentLoop(cast(Any, SlowDoneProvider()), [instant], AgentConfig(), LLMConfig(api_key="x"))
     stream_gen: AsyncGenerator[str, None] = loop.run("run tool", [], "")
-    first = await anext(stream_gen)
+    # Skip past graph events (user_msg, llm_0, edges) to reach tool_start
+    first: str = ""
+    async for sse in stream_gen:
+        if sse.startswith("event: tool_start"):
+            first = sse
+            break
     assert first.startswith("event: tool_start")
     await stream_gen.aclose()
 

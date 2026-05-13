@@ -22,6 +22,7 @@ from starlette.status import HTTP_401_UNAUTHORIZED
 
 from yomai import env
 from yomai._types import Request, read_json_body
+from yomai._version import __version__ as _yomai_version
 from yomai.auth import AuthBackend, NoAuth
 from yomai.budget import BudgetTracker
 from yomai.config import (
@@ -41,6 +42,7 @@ from yomai.exceptions import YomaiConfigError, YomaiRouteError
 from yomai.hooks import HookHandler, HookRegistry
 from yomai.jobs import (
     InMemoryCheckpointStore,
+    InMemoryInterruptStore,
     InMemoryJobEventStore,
     InMemoryJobStore,
     JobRecord,
@@ -48,6 +50,7 @@ from yomai.jobs import (
     RedisJobEventStore,
     RedisJobStore,
 )
+from yomai.jobs.interrupts import ResumeRequest
 from yomai.limits import InMemoryRateLimiter, RedisRateLimiter
 from yomai.llm import LLMProvider
 from yomai.llm.anthropic import AnthropicProvider
@@ -63,6 +66,19 @@ from yomai.streaming.sse import format_sse_with_id
 from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_result
 from yomai.workflow.runner import WorkflowRunner
+
+
+def _capture_type_locals(fn: Callable[..., Any]) -> None:
+    """Store the caller's local namespace on the function for later type resolution.
+
+    Called from decorators nested inside route registration methods, so the
+    stack is: helper -> decorator -> method. We need the method's locals.
+    """
+    caller_frame: Any = inspect.currentframe()
+    if caller_frame is not None:
+        method_frame = caller_frame.f_back.f_back if caller_frame.f_back else None
+        if method_frame is not None:
+            fn._yomai_type_locals = dict(method_frame.f_locals)
 
 
 class Depends:
@@ -128,9 +144,7 @@ class RouteGroup:
         }
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             self._gets.append((fn, opts))
             return fn
 
@@ -168,9 +182,7 @@ class RouteGroup:
         }
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             self._agents.append((fn, opts))
             return fn
 
@@ -203,9 +215,7 @@ class RouteGroup:
         }
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             self._workflows.append((fn, opts))
             return fn
 
@@ -244,6 +254,7 @@ class Yomai:
         self.checkpoints = self._build_checkpoint_store()
         self.hooks = HookRegistry()
         self.rate_limiter = self._build_rate_limiter()
+        self._interrupt_store = InMemoryInterruptStore()
         self._metrics_counters: Counter[str] = Counter()
         self._metrics_lock = asyncio.Lock()
         self._active_lock = asyncio.Lock()
@@ -269,6 +280,7 @@ class Yomai:
                 Route("/__yomai__/jobs/{job_id}", self._job_status, methods=["GET"]),
                 Route("/__yomai__/jobs/{job_id}/stream", self._job_stream, methods=["GET"]),
                 Route("/__yomai__/jobs/{job_id}/cancel", self._job_cancel, methods=["POST"]),
+                Route("/__yomai__/interrupts/{interrupt_id}/resume", self._interrupt_resume, methods=["POST"]),
                 Route("/__yomai__/metrics", self._metrics, methods=["GET"]),
             ]
         )
@@ -330,7 +342,7 @@ class Yomai:
 
     async def _health(self, request: Request) -> Response:
         depth = request.query_params.get("depth", "shallow")
-        response: dict[str, Any] = {"status": "ok", "version": "0.1.0"}
+        response: dict[str, Any] = {"status": "ok", "version": _yomai_version}
 
         if depth == "deep":
             deps: dict[str, Any] = {}
@@ -423,6 +435,26 @@ class Yomai:
                 "errors_total": metrics.get("errors_total", 0),
             }
         )
+
+    async def _interrupt_resume(self, request: Request) -> JSONResponse:
+        interrupt_id = request.path_params["interrupt_id"]
+        try:
+            body: Any = await read_json_body(request)
+        except Exception:
+            return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
+
+        try:
+            req = ResumeRequest.model_validate(body)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        ok = await self._interrupt_store.resolve(
+            interrupt_id, req.response,
+            action=req.action, comment=req.comment, resolved_by=req.resolved_by,
+        )
+        if not ok:
+            return JSONResponse({"error": "Interrupt not found or already resolved"}, status_code=404)
+        return JSONResponse({"status": "resolved", "id": interrupt_id, "action": req.action})
 
     async def _job_cancel(self, request: Request) -> JSONResponse:
         auth_error = self._metadata_auth_error(request)
@@ -676,9 +708,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
 
             route = AgentRoute(
                 path,
@@ -701,6 +731,7 @@ class Yomai:
                 auth=self._auth,
             )
             route._budget_tracker = self.budget
+            route._hooks = self.hooks
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
@@ -756,9 +787,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
 
             self._workflow_handlers[path] = fn
 
@@ -894,6 +923,7 @@ class Yomai:
                 dependencies or [],
                 auth=self._auth,
             )
+            route._hooks = self.hooks
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             body_params = self._route_params(fn, injected={"runner", "request"}, path_params=path_params)
@@ -936,9 +966,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import GetRoute
 
             route = GetRoute(
@@ -993,9 +1021,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import DeleteRoute
 
             route = DeleteRoute(
@@ -1050,9 +1076,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import HeadRoute
 
             route = HeadRoute(
@@ -1088,9 +1112,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import OptionsRoute
 
             route = OptionsRoute(
@@ -1126,9 +1148,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import PutRoute
 
             route = PutRoute(
@@ -1183,9 +1203,7 @@ class Yomai:
         path_params = self._extract_path_params(path)
 
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
-            caller_frame: Any = inspect.currentframe()
-            if caller_frame is not None and caller_frame.f_back is not None:
-                fn._yomai_type_locals = dict(caller_frame.f_back.f_locals)
+            _capture_type_locals(fn)
             from yomai.core.router import PatchRoute
 
             route = PatchRoute(

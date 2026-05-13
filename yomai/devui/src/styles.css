@@ -1,0 +1,26 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: rgb(17 24 39);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: rgb(55 65 81);
+    border-radius: 3px;
+  }
+}
+
+@keyframes pulse-node {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.graph-node-running {
+  animation: pulse-node 1.5s ease-in-out infinite;
+}

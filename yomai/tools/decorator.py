@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import inspect
-import warnings
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar, get_args, get_origin, get_type_hints, overload
 
@@ -84,21 +83,17 @@ def tool(fn: F | None = None, *, cache_ttl: int | None = None, timeout_secs: int
     """Mark a sync or async Python function as LLM-callable while preserving its type.
 
     Args:
+        cache_ttl: Seconds to cache the tool result for identical arguments. In-memory cache.
         timeout_secs: Max seconds a single tool invocation may run before being cancelled.
         max_retries: Number of retry attempts on tool failure (0 = no retry).
     """
-    if cache_ttl is not None:
-        warnings.warn(
-            "cache_ttl has no effect in V1. Redis-backed caching ships in V2.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
 
     def decorate(func: F) -> F:
         func.schema = _build_schema(func)
         func.tool_name = func.__name__
         func._tool_timeout_secs = timeout_secs
         func._tool_max_retries = max_retries
+        func._tool_cache_ttl = cache_ttl
         _registry.register(func)
         return func
 

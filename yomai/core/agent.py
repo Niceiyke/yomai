@@ -9,11 +9,39 @@ from typing import TYPE_CHECKING, Any, Protocol, cast, get_args, get_origin
 
 if TYPE_CHECKING:
     from yomai.budget import BudgetTracker
+    from yomai.hooks import HookRegistry
 
 from yomai.config import AgentConfig, LLMConfig
 from yomai.llm.base import Done, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
-from yomai.streaming.sse import sse_chunk, sse_done, sse_error, sse_tool_end, sse_tool_start, sse_usage
+from yomai.streaming.sse import (
+    sse_chunk,
+    sse_done,
+    sse_error,
+    sse_graph_edge,
+    sse_graph_update,
+    sse_graph_upsert,
+    sse_tool_end,
+    sse_tool_start,
+    sse_usage,
+)
+from yomai.tools.cache import _cache as _tool_cache
 from yomai.tools.registry import ToolFunction, _registry
+
+
+def _message_text(message: str | list[dict[str, Any]]) -> str:
+    """Return a plain-text representation of the message for storage/graphs."""
+    if isinstance(message, str):
+        return message
+    parts: list[str] = []
+    for block in message:
+        if isinstance(block, dict):
+            if block.get("type") == "text":
+                parts.append(str(block.get("text", "")))
+            elif block.get("type") == "image_url":
+                parts.append("[image]")
+            elif block.get("type") == "input_audio":
+                parts.append("[audio]")
+    return " ".join(parts) if parts else "[multi-modal]"
 
 
 class ToolSchemaProvider(Protocol):
@@ -34,6 +62,7 @@ class AgentLoop:
         *,
         budget_tracker: BudgetTracker | None = None,
         session_id: str = "",
+        hooks: HookRegistry | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -41,10 +70,12 @@ class AgentLoop:
         self.llm_config = llm_config
         self.budget_tracker = budget_tracker
         self.session_id = session_id
+        self.hooks = hooks
         self.last_reply: str = ""
         self.last_usage: Done = Done()
         self.strip_reasoning = llm_config.strip_reasoning if llm_config else False
         self._inside_reasoning = False
+        self._pending_tool_nodes: list[str] = []
         self._tool_map = {getattr(tool, "tool_name", getattr(tool, "__name__", "")): tool for tool in tools}
 
     def _tool_schemas(self) -> list[ToolSchema]:
@@ -61,55 +92,128 @@ class AgentLoop:
             + usage.output_tokens * self.llm_config.cost_per_token.get("output", 0.0)
         )
 
-    async def run(self, message: str, history: list[Message], system: str = "") -> AsyncGenerator[str, None]:
+    async def run(self, message: str | list[dict[str, Any]], history: list[Message], system: str = "") -> AsyncGenerator[str, None]:
         messages: list[Message] = [*history, {"role": "user", "content": message}]
         tool_schemas = self._tool_schemas()
         iterations = 0
         usage = Done()
+        model_label = self.llm_config.model if self.llm_config else "llm"
+        tool_count = 0
 
-        while iterations <= self.config.max_tool_calls:
-            saw_tool_call = False
+        # Display label for graph/hooks
+        if isinstance(message, str):
+            msg_label = message
+        else:
+            msg_label = next((b.get("text", "") for b in message if isinstance(b, dict) and b.get("type") == "text"), "[multi-modal]")
 
-            async for event in self.provider.stream(messages, tool_schemas, system):
-                if isinstance(event, TextChunk):
-                    content = self._maybe_strip_reasoning(event.content)
-                    self.last_reply += content
-                    yield sse_chunk(content)
-                elif isinstance(event, ToolCall):
-                    if iterations >= self.config.max_tool_calls:
-                        yield sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
-                        saw_tool_call = False
-                        break
-                    saw_tool_call = True
-                    async for sse in self._execute_tool_call(event, messages):
-                        yield sse
-                elif isinstance(event, Done):
-                    usage.input_tokens += event.input_tokens
-                    usage.output_tokens += event.output_tokens
-                    self.last_usage = Done(usage.input_tokens, usage.output_tokens)
+        if self.hooks is not None:
+            self.hooks.emit_background("agent.start", session_id=self.session_id, message=msg_label[:200])
+            self.hooks.emit_background("request.start", session_id=self.session_id)
 
-                    # Budget check
-                    if self.budget_tracker and self.session_id:
-                        result = self.budget_tracker.check(
-                            self.session_id,
-                            event.input_tokens,
-                            event.output_tokens,
-                            self._estimate_cost(event),
-                        )
-                        if result["exceeded"]:
-                            msg = f"Budget exceeded: {result.get('reason', 'limit')}"
-                            yield sse_error(msg, "budget_exceeded")
-                            yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
-                            yield sse_done()
-                            return
+        user_label = msg_label[:80] + ("..." if len(msg_label) > 80 else "")
+        yield sse_graph_upsert("user_msg", user_label, "user_msg", "done")
 
-            if not saw_tool_call:
-                break
+        try:
+            while iterations <= self.config.max_tool_calls:
+                saw_tool_call = False
+                llm_id = f"llm_{iterations}"
+                yield sse_graph_upsert(llm_id, f"LLM: {model_label}", "llm", "running")
 
-            iterations += 1
+                if iterations == 0:
+                    yield sse_graph_edge("user_msg", llm_id, "prompt")
+                elif self._pending_tool_nodes:
+                    for tool_id in self._pending_tool_nodes:
+                        yield sse_graph_edge(tool_id, llm_id, "tool_result")
+                self._pending_tool_nodes.clear()
 
-        yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
-        yield sse_done()
+                llm_start_tokens = (usage.input_tokens, usage.output_tokens)
+
+                async for event in self.provider.stream(messages, tool_schemas, system):
+                    if isinstance(event, TextChunk):
+                        content = self._maybe_strip_reasoning(event.content)
+                        self.last_reply += content
+                        yield sse_chunk(content)
+                        if self.hooks is not None:
+                            self.hooks.emit_background("agent.chunk", session_id=self.session_id, content=content[:200])
+                    elif isinstance(event, ToolCall):
+                        if iterations >= self.config.max_tool_calls:
+                            yield sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
+                            if self.hooks is not None:
+                                self.hooks.emit_background("agent.error", session_id=self.session_id,
+                                    error="max_tool_calls_exceeded")
+                            saw_tool_call = False
+                            break
+                        saw_tool_call = True
+                        tool_count += 1
+                        async for sse in self._execute_tool_call(event, messages, llm_id):
+                            yield sse
+                    elif isinstance(event, Done):
+                        usage.input_tokens += event.input_tokens
+                        usage.output_tokens += event.output_tokens
+                        self.last_usage = Done(usage.input_tokens, usage.output_tokens)
+
+                        # Budget check
+                        if self.budget_tracker and self.session_id:
+                            result = self.budget_tracker.check(
+                                self.session_id,
+                                event.input_tokens,
+                                event.output_tokens,
+                                self._estimate_cost(event),
+                            )
+                            if result["exceeded"]:
+                                msg = f"Budget exceeded: {result.get('reason', 'limit')}"
+                                yield sse_graph_update(llm_id, "error", meta={"reason": result.get("reason", "limit")})
+                                yield sse_error(msg, "budget_exceeded")
+                                yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
+                                yield sse_done()
+                                if self.hooks is not None:
+                                    self.hooks.emit_background("agent.budget_exceeded", session_id=self.session_id,
+                                        reason=result.get("reason", "limit"),
+                                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens)
+                                    self.hooks.emit_background("agent.done", session_id=self.session_id,
+                                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
+                                        tool_calls=tool_count)
+                                    self.hooks.emit_background("request.end", session_id=self.session_id,
+                                        status="budget_exceeded")
+                                return
+
+                this_in = usage.input_tokens - llm_start_tokens[0]
+                this_out = usage.output_tokens - llm_start_tokens[1]
+                yield sse_graph_update(
+                    llm_id,
+                    "done",
+                    meta={"tokens_in": usage.input_tokens, "tokens_out": usage.output_tokens},
+                )
+                if self.hooks is not None:
+                    self.hooks.emit_background("agent.llm_call", session_id=self.session_id,
+                        iteration=iterations, tokens_in=this_in, tokens_out=this_out)
+
+                if not saw_tool_call:
+                    break
+
+                iterations += 1
+
+            # Emit response node
+            resp_label = self.last_reply[:80] + ("..." if len(self.last_reply) > 80 else "")
+            yield sse_graph_upsert("response", resp_label or "(empty)", "response", "done")
+            yield sse_graph_edge(f"llm_{iterations}", "response", "output")
+
+            yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
+            yield sse_done()
+
+            if self.hooks is not None:
+                self.hooks.emit_background("agent.done", session_id=self.session_id,
+                    tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
+                    tool_calls=tool_count, iterations=iterations)
+                self.hooks.emit_background("request.end", session_id=self.session_id, status="ok")
+
+        except Exception as exc:
+            if self.hooks is not None:
+                self.hooks.emit_background("agent.error", session_id=self.session_id,
+                    error=str(exc)[:200], error_type=exc.__class__.__name__)
+                self.hooks.emit_background("request.end", session_id=self.session_id,
+                    status="error", error=str(exc)[:200])
+            raise
 
     def _maybe_strip_reasoning(self, text: str) -> str:
         if not self.strip_reasoning:
@@ -135,14 +239,58 @@ class AgentLoop:
 
         return "".join(output)
 
-    async def _execute_tool_call(self, tool_call: ToolCall, messages: list[Message]) -> AsyncGenerator[str, None]:
+    async def _execute_tool_call(
+        self, tool_call: ToolCall, messages: list[Message], parent_llm_id: str
+    ) -> AsyncGenerator[str, None]:
         """Execute a tool immediately and stream tool_start/tool_end as soon as the call is observed."""
+        tool_id = f"tool_{tool_call.name}_{tool_call.id}"
+        args_preview = ", ".join(f"{k}={v!r}" for k, v in list(tool_call.args.items())[:3])
+        tool_label = f"{tool_call.name}({args_preview})" if args_preview else tool_call.name
+
+        if self.hooks is not None:
+            self.hooks.emit_background("agent.tool_call", session_id=self.session_id,
+                tool_name=tool_call.name, tool_id=tool_call.id, args=tool_call.args)
+
+        yield sse_graph_upsert(tool_id, tool_label[:80], "tool", "running")
+        yield sse_graph_edge(parent_llm_id, tool_id, "tool_call")
+
         yield sse_tool_start(tool_call.name, tool_call.args, tool_call.id)
         start = time.monotonic()
         result: Any
         fn = _registry.get(tool_call.name) if tool_call.name in self._tool_map else None
+
+        # Progress callback for streaming tools
+        async def _emit_progress(msg: str) -> None:
+            """Called by tools to stream intermediate progress."""
+            # This is a closure capturing the parent generator — we can't await put_sse
+            # directly since _execute_tool_call is itself an async generator.
+            # We queue it via the graph update mechanism instead.
+            pass  # Implemented via sse_tool_progress in the caller
+
+        # Check tool cache
+        cache_ttl: int | None = getattr(fn, "_tool_cache_ttl", None) if fn is not None else None
+        if cache_ttl is not None and fn is not None:
+            cached = _tool_cache.get(tool_call.name, tool_call.args)
+            if cached is not None:
+                result = cached
+                duration_ms = int((time.monotonic() - start) * 1000)
+                result_str = str(result)
+                yield sse_graph_update(
+                    tool_id, "done",
+                    meta={"result": result_str[:200], "duration_ms": duration_ms, "cached": True},
+                )
+                yield sse_tool_end(tool_call.id, result_str, duration_ms)
+                messages.extend(self._tool_result_messages(tool_call, result_str))
+                self._pending_tool_nodes.append(tool_id)
+                if self.hooks is not None:
+                    self.hooks.emit_background("agent.tool_result", session_id=self.session_id,
+                        tool_name=tool_call.name, tool_id=tool_call.id,
+                        result=result_str[:200], duration_ms=duration_ms, error=False)
+                return
+
         if fn is None:
             result = f"Error: Unknown tool {tool_call.name!r}"
+            yield sse_graph_update(tool_id, "error", meta={"message": result})
             yield sse_error(result, "unknown_tool")
         else:
             timeout = getattr(fn, "_tool_timeout_secs", None)
@@ -178,8 +326,24 @@ class AgentLoop:
 
         duration_ms = int((time.monotonic() - start) * 1000)
         result_str = str(result)
+        is_error = result_str.startswith("Error:")
+        yield sse_graph_update(
+            tool_id,
+            "error" if is_error else "done",
+            meta={"result": result_str[:200], "duration_ms": duration_ms},
+        )
         yield sse_tool_end(tool_call.id, result_str, duration_ms)
         messages.extend(self._tool_result_messages(tool_call, result_str))
+        self._pending_tool_nodes.append(tool_id)
+
+        # Cache successful results
+        if cache_ttl is not None and fn is not None and not is_error:
+            _tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
+
+        if self.hooks is not None:
+            self.hooks.emit_background("agent.tool_result", session_id=self.session_id,
+                tool_name=tool_call.name, tool_id=tool_call.id,
+                result=result_str[:200], duration_ms=duration_ms, error=is_error)
 
     def _validate_tool_args(self, fn: ToolFunction, args: dict[str, Any]) -> None:
         hints = getattr(fn, "__annotations__", {})

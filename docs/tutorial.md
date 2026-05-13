@@ -177,19 +177,63 @@ async def clear_history(session_id: str):
 
 ## Step 7 — Hooks (Lifecycle Events)
 
+Hook handlers must be **async**. All handlers for a given event run **concurrently** — a slow Slack webhook won't block a fast metrics counter.
+
 ```python
+from yomai import HookEvent
+
+# Agent hooks — the full lifecycle of every LLM call
+@app.on("agent.start")
+async def on_agent_start(event: HookEvent):
+    print(f"Session {event.payload['session_id']} started")
+
+@app.on("agent.chunk")
+async def on_chunk(event: HookEvent):
+    pass  # High volume — ~100s per request. Use emit_background internally.
+
+@app.on("agent.tool_call")
+async def on_tool_call(event: HookEvent):
+    print(f"Tool: {event.payload['tool_name']}({event.payload['args']})")
+
+@app.on("agent.tool_result")
+async def on_tool_result(event: HookEvent):
+    duration = event.payload['duration_ms']
+    print(f"Result ({duration}ms): {event.payload['result'][:50]}")
+
+@app.on("agent.done")
+async def on_agent_done(event: HookEvent):
+    await send_slack(f"Agent: {event.payload['tokens_in']}→{event.payload['tokens_out']} tokens")
+
+@app.on("agent.error")
+async def on_agent_error(event: HookEvent):
+    await send_alert(f"Agent failed: {event.payload['error']}")
+
+# Workflow/job hooks
+@app.on("job.queued")
+async def on_job_queued(event: HookEvent):
+    print(f"Job {event.payload['job_id']} queued for {event.payload['route']}")
+
 @app.on("job.succeeded")
-async def on_job_done(event):
+async def on_job_done(event: HookEvent):
     print(f"Job {event.payload['job_id']} completed!")
-    # Send a Slack notification, update a database, etc.
+    await update_database(event.payload['job_id'], "success")
 
 @app.on("error")
-async def on_error(event):
+async def on_error(event: HookEvent):
     print(f"Error in {event.payload['route']}: {event.payload['error']}")
+
+# Error aggregation — check for handler failures
+failures = app.hooks.pop_failures()
 ```
 
-Available hooks: `job.queued`, `job.started`, `job.succeeded`, `job.failed`,
-`job.cancelled`, `workflow.start`, `workflow.done`, `workflow.failed`, `error`.
+**`await emit()` vs `emit_background()`:**
+
+- `await emit("agent.start")` — blocks until all `agent.start` handlers finish. Guarantees that `agent.start` handlers complete before `agent.done` fires.
+- `emit_background("agent.chunk")` — fire-and-forget. A slow chunk handler may still be running when `agent.done` fires. Used for high-volume events where latency matters.
+
+Most built-in hooks use `emit_background` to avoid slowing the SSE stream. Switch to `await emit()` if you need ordering guarantees between hook names.
+
+Available hooks: `agent.start`, `agent.chunk`, `agent.llm_call`, `agent.tool_call`, `agent.tool_result`, `agent.budget_exceeded`, `agent.done`, `agent.error`, `request.start`, `request.end`, `stream.start`, `stream.end`, `job.queued`, `job.started`, `job.succeeded`, `job.failed`, `job.cancelled`, `workflow.start`, `workflow.done`, `workflow.failed`, `workflow.retrying`, `error`.
 
 ## Step 8 — Authentication
 

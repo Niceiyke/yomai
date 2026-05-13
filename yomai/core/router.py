@@ -18,7 +18,8 @@ from yomai._types import Request, read_json_body
 from yomai.auth import AuthBackend
 from yomai.config import AgentConfig, LLMConfig
 from yomai.core._base_route import AcceptCallback, BaseRoute, LifecycleCallback
-from yomai.core.agent import AgentLoop
+from yomai.core.agent import AgentLoop, _message_text
+from yomai.core.schemas import AgentRequest
 from yomai.llm import LLMProvider
 from yomai.memory import MemoryBackend
 from yomai.middleware.logging import StreamLog
@@ -186,18 +187,20 @@ class AgentRoute(BaseRoute):
         await self._run_dependencies(request, path_kwargs)
 
         try:
-            body: Any = await read_json_body(request)
+            raw: Any = await read_json_body(request)
         except Exception:
             return JSONResponse({"error": "Request body must be valid JSON"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
-        message = body.get("message")
-        if not isinstance(message, str) or not message:
-            return JSONResponse({"error": "Missing required string field: message"}, status_code=400)
+
+        try:
+            body = AgentRequest.model_validate(raw)
+        except Exception as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        message = body.message
 
         session_id = request.headers.get("X-Session-Id") or str(uuid.uuid4())
         try:
-            handler_kwargs = self._build_kwargs(body, message, session_id, path_kwargs, request)
+            handler_kwargs = self._build_kwargs(body.model_dump(), message, session_id, path_kwargs, request)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers()}
@@ -211,25 +214,24 @@ class AgentRoute(BaseRoute):
 
         async def run_agent() -> None:
             agent_loop: AgentLoop | None = None
-            completed = False
             try:
                 result = self.handler(**handler_kwargs)
                 if inspect.isawaitable(result):
                     await result
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
-                    budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id)
+                    budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id,
+                    hooks=getattr(self, '_hooks', None))
                 async for sse in agent_loop.run(message, history=history, system=self.system):
                     await put_sse(sse)
-                completed = True
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
                 await put_sse(sse_error(message_out, exc.__class__.__name__))
             finally:
-                if completed and agent_loop is not None:
-                    await self.memory.save(session_id, message, agent_loop.last_reply)  # type: ignore[union-attr]
+                if agent_loop is not None and agent_loop.last_reply:
+                    await self.memory.save(session_id, _message_text(message), agent_loop.last_reply)  # type: ignore[union-attr]
                 await queue.put(None)
 
         async def generate() -> AsyncIterator[str]:
@@ -239,6 +241,9 @@ class AgentRoute(BaseRoute):
             seq = 0
             if self.on_stream_start is not None:
                 self.on_stream_start()
+            hooks = getattr(self, '_hooks', None)
+            if hooks is not None:
+                hooks.emit_background("stream.start", session_id=session_id, path=self.path)
             try:
                 while True:
                     if time.monotonic() - started_at > self.agent_config.timeout_secs:
@@ -266,6 +271,8 @@ class AgentRoute(BaseRoute):
                     agent_task.cancel()
                 if self.on_stream_end is not None:
                     self.on_stream_end()
+                if hooks is not None:
+                    hooks.emit_background("stream.end", session_id=session_id, path=self.path)
                 if stream_log is not None:
                     stream_log.emit()
 
@@ -374,6 +381,9 @@ class WorkflowRoute(BaseRoute):
             started_at = time.monotonic()
             if self.on_stream_start is not None:
                 self.on_stream_start()
+            hooks = getattr(self, '_hooks', None)
+            if hooks is not None:
+                hooks.emit_background("stream.start", session_id=session_id, path=self.path)
             try:
                 while True:
                     if time.monotonic() - started_at > self.app.config.streaming.max_duration_secs:
@@ -399,6 +409,8 @@ class WorkflowRoute(BaseRoute):
                     task.cancel()
                 if self.on_stream_end is not None:
                     self.on_stream_end()
+                if hooks is not None:
+                    hooks.emit_background("stream.end", session_id=session_id, path=self.path)
                 if stream_log is not None:
                     stream_log.emit()
 

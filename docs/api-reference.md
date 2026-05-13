@@ -632,26 +632,82 @@ Manages hook handler registration and event emission. An instance is created aut
 
 ```python
 class HookRegistry:
-    def __init__(self) -> None: ...
-
     def on(self, name: str, handler: HookHandler) -> HookHandler: ...
 
-    async def emit(self, name: str, **payload: Any) -> None: ...
+    async def emit(self, name: str, **payload: Any) -> list[dict[str, Any]]: ...
 
     def emit_background(self, name: str, **payload: Any) -> None: ...
+
+    def pop_failures(self) -> list[dict[str, Any]]: ...
 ```
 
 | Method | Description |
 |--------|-------------|
 | `on(name, handler)` | Register a handler for a named event. Returns the handler. |
-| `emit(name, **payload)` | Fire all handlers for the given event asynchronously. Awaitable. |
-| `emit_background(name, **payload)` | Fire all handlers as a background task (non-blocking). Safe to call from sync contexts. |
+| `emit(name, **payload)` | Fire all handlers concurrently. **Awaited** — blocks until every handler finishes. Returns failures list. |
+| `emit_background(name, **payload)` | Fire all handlers as a background task (fire-and-forget). Does **not** await completion. |
+| `pop_failures()` | Return and clear accumulated handler errors across all hook invocations. |
+
+#### `emit()` vs `emit_background()`
+
+| | `await emit()` | `emit_background()` |
+|---|---|---|
+| **Blocks caller** | Yes, until all handlers done | No, returns immediately |
+| **Ordering across hook names** | Guaranteed — handlers for hook A complete before hook B's `emit()` is called | **Not guaranteed** — a slow `agent.start` handler may still be running when `agent.done` fires |
+| **Use when** | You need ordering guarantees (e.g., audit trail must be written before next step) | You don't want hook latency to slow the response stream |
+
+```python
+# emit() — ordering guaranteed
+await app.hooks.emit("agent.start", session_id=sid)
+# ... agent runs ...
+await app.hooks.emit("agent.done", session_id=sid)
+# ↑ agent.done handlers run only after agent.start handlers have finished
+
+# emit_background() — fire-and-forget, no ordering
+app.hooks.emit_background("agent.chunk", content="hello")  # <-- may still be running
+app.hooks.emit_background("agent.done")                      # <-- when this starts
+```
+
+#### Concurrency model
+
+All handlers for a given hook name run **concurrently** via `asyncio.gather`. A slow handler (e.g., Slack webhook at 80ms) does not block fast ones (e.g., metrics counter at 1ms). Handler **order is not guaranteed** — if two handlers must run in sequence, compose them into one handler.
+
+All handlers **must be async** (`async def`). Sync handlers are no longer supported.
 
 ---
 
 ### Hook Events Reference
 
 Events emitted by the Yomai application and available for handling via `app.on()`:
+
+**Agent lifecycle:**
+
+| Event Name | Payload Keys | When Emitted |
+|------------|-------------|--------------|
+| `agent.start` | `session_id`, `message` | Agent begins processing a message |
+| `agent.chunk` | `session_id`, `content` | Each text chunk from the LLM (high volume — uses `emit_background`) |
+| `agent.llm_call` | `session_id`, `iteration`, `tokens_in`, `tokens_out` | Each LLM API call (one per tool-call loop iteration) |
+| `agent.tool_call` | `session_id`, `tool_name`, `tool_id`, `args` | A tool is invoked |
+| `agent.tool_result` | `session_id`, `tool_name`, `tool_id`, `result`, `duration_ms`, `error` | A tool returns |
+| `agent.budget_exceeded` | `session_id`, `reason`, `tokens_in`, `tokens_out` | Token or cost budget limit hit |
+| `agent.done` | `session_id`, `tokens_in`, `tokens_out`, `tool_calls`, `iterations` | Agent completes successfully |
+| `agent.error` | `session_id`, `error`, `error_type` | Agent fails |
+
+**Request lifecycle:**
+
+| Event Name | Payload Keys | When Emitted |
+|------------|-------------|--------------|
+| `request.start` | `session_id` | HTTP request begins processing |
+| `request.end` | `session_id`, `status` | HTTP request completes (`"ok"`, `"error"`, `"budget_exceeded"`) |
+
+**Stream lifecycle:**
+
+| Event Name | Payload Keys | When Emitted |
+|------------|-------------|--------------|
+| `stream.start` | `session_id`, `path` | SSE stream opens |
+| `stream.end` | `session_id`, `path` | SSE stream closes (disconnect, timeout, or normal completion) |
+
+**Job/workflow lifecycle:**
 
 | Event Name | Payload Keys | When Emitted |
 |------------|-------------|--------------|
@@ -663,6 +719,7 @@ Events emitted by the Yomai application and available for handling via `app.on()
 | `workflow.start` | `job_id`, `route` | A workflow begins executing steps |
 | `workflow.done` | `job_id`, `route`, `result` | A workflow completes all steps |
 | `workflow.failed` | `job_id`, `route`, `error` | A workflow fails |
+| `workflow.retrying` | `job_id`, `route`, `attempt` | A workflow retries after failure |
 | `error` | `job_id`, `route`, `error` | Any error during request processing |
 
 **Example:**
@@ -670,14 +727,38 @@ Events emitted by the Yomai application and available for handling via `app.on()
 ```python
 from yomai import HookEvent
 
-@app.on("job.succeeded")
-async def log_success(event: HookEvent):
-    print(f"Job succeeded: {event.payload}")
+@app.on("agent.start")
+async def on_agent_start(event: HookEvent):
+    print(f"Agent started: {event.payload['session_id']}")
 
-@app.on("error")
-async def log_error(event: HookEvent):
-    print(f"Error on {event.payload['route']}: {event.payload['error']}")
+@app.on("agent.done")
+async def on_agent_done(event: HookEvent):
+    print(f"Agent done: {event.payload['tokens_in']}→{event.payload['tokens_out']} tokens")
+
+@app.on("agent.tool_call")
+async def on_tool(event: HookEvent):
+    await send_slack(f"Tool: {event.payload['tool_name']}({event.payload['args']})")
+
+@app.on("stream.start")
+async def on_stream_start(event: HookEvent):
+    print(f"SSE stream opened on {event.payload['path']}")
 ```
+
+**Error aggregation:**
+
+```python
+@app.on("agent.chunk")
+async def flaky_webhook(event: HookEvent):
+    if random.random() < 0.1:
+        raise RuntimeError("webhook failed")
+    await post_to_slack(event.payload["content"])
+
+# After some requests, check for failures:
+failures = app.hooks.pop_failures()
+for f in failures:
+    print(f"Handler '{f['handler']}' failed: {f['error']}")
+```
+
 
 ---
 

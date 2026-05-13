@@ -21,3 +21,6 @@ support_sessions.db
 # Coverage
 .coverage
 coverage.xml
+
+# Node (devui playground)
+yomai/devui/node_modules/

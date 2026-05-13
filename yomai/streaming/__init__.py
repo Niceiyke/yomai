@@ -27,6 +27,11 @@ from yomai.streaming.sse import (
     sse_chunk,
     sse_done,
     sse_error,
+    sse_graph_clear,
+    sse_graph_edge,
+    sse_graph_update,
+    sse_graph_upsert,
+    sse_interrupt,
     sse_ping,
     sse_tool_end,
     sse_tool_start,
@@ -45,6 +50,13 @@ __all__ = [
     "sse_done",
     "sse_error",
     "sse_ping",
+    # Graph events
+    "sse_graph_upsert",
+    "sse_graph_edge",
+    "sse_graph_update",
+    "sse_graph_clear",
+    # Human-in-the-loop
+    "sse_interrupt",
     # Utilities
     "heartbeat",
 ]

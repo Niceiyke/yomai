@@ -87,6 +87,7 @@ class BudgetTracker:
                 _log.warning("budget.exceeded %s session=%s", result.get("reason"), session_id, extra=result)
             else:
                 _log.info("budget.warning %s session=%s", result.get("reason"), session_id, extra=result)
+                result["exceeded"] = False
 
         return result
 
