@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, TypeAlias
@@ -27,8 +26,32 @@ def _normalise_turn(item: MockResponseItem | MockTurn) -> MockTurn:
     return [item]
 
 
+class _MockStream:
+    """Async iterator adapter for deterministic mock responses."""
+
+    def __init__(self, items: list[MockResponseItem | Done]) -> None:
+        self._items = items
+        self._pos = 0
+
+    def __aiter__(self) -> _MockStream:
+        return self
+
+    async def __anext__(self) -> LLMEvent:
+        if self._pos >= len(self._items):
+            raise StopAsyncIteration
+        item = self._items[self._pos]
+        self._pos += 1
+        if isinstance(item, str):
+            return TextChunk(item)
+        if isinstance(item, Done):
+            return item
+        if isinstance(item, MockToolCall):
+            return ToolCall(id=item.id, name=item.name, args=item.args)
+        raise StopAsyncIteration
+
+
 @contextmanager
-def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None) -> Iterator[None]:
+def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None):
     """Replace provider streaming with deterministic scripted turns.
 
     Each provider.stream() call consumes one turn. A bare string or MockToolCall is
@@ -46,12 +69,12 @@ def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None) -> Iter
         self.model = getattr(config, "model", "mock")
         self.max_tokens = getattr(config, "max_tokens", 1024)
 
-    async def fake_stream(
+    def fake_stream(
         self: Any,
         messages: list[Message],
         tools: list[ToolSchema],
         system: str,
-    ) -> AsyncIterator[LLMEvent]:
+    ) -> _MockStream:
         nonlocal index
         if index < len(turns):
             turn = turns[index]
@@ -60,14 +83,10 @@ def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None) -> Iter
             turn = []
 
         input_tokens = sum(len(str(message.get("content", "")).split()) for message in messages)
-        output_tokens = 0
-        for item in turn:
-            if isinstance(item, str):
-                output_tokens += len(item.split())
-                yield TextChunk(item)
-            else:
-                yield ToolCall(id=item.id, name=item.name, args=item.args)
-        yield Done(input_tokens=input_tokens, output_tokens=output_tokens)
+        output_tokens = sum(len(item.split()) for item in turn if isinstance(item, str))
+
+        items: list[MockResponseItem | Done] = list(turn) + [Done(input_tokens=input_tokens, output_tokens=output_tokens)]
+        return _MockStream(items)
 
     AnthropicProvider.__init__ = fake_init  # type: ignore[method-assign]
     AnthropicProvider.stream = fake_stream  # type: ignore[method-assign]

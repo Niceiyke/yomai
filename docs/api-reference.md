@@ -1,6 +1,6 @@
 # Yomai API Reference
 
-> **Version:** 0.1.0
+> **Version:** 0.3.0
 
 Complete reference for the public API surface of the Yomai framework. All classes, functions, and configuration models documented here are importable from the top-level `yomai` package unless otherwise noted.
 

@@ -1,5 +1,65 @@
 # Changelog
 
+## 0.3.0
+
+### Orchestration, HITL, and developer experience
+
+**Workflow orchestration:**
+- Shared state (`runner.state`) auto-populated from step outputs
+- `runner.branch(condition, on_true, on_false)` — conditional routing with graph viz
+- `runner.tool(fn, **kwargs)` — direct tool execution, no LLM overhead
+- `runner.step(retries=N, backoff_secs=X)` — retry with exponential backoff
+- `runner.delegate(agent_fn, prompt)` — dynamic agent-to-agent orchestration
+- `runner.parallel(steps)` — concurrent agent execution
+
+**Human-in-the-loop:**
+- `runner.interrupt(message)` — pause workflow, await human input via resume endpoint
+- `runner.approve(message, content=...)` — structured approve/reject with typed result
+- `POST /__yomai__/interrupts/{id}/resume` — resolves pending interrupts
+- InMemoryInterruptStore + RedisInterruptStore for multi-worker deployments
+- Auto-injected `request_human_input` tool in every workflow step agent
+
+**Hooks:**
+- Async-only, concurrent execution via `asyncio.gather`
+- Agent lifecycle: `agent.start`, `agent.chunk`, `agent.tool_call`, `agent.tool_result`, `agent.llm_call`, `agent.done`, `agent.error`, `agent.budget_exceeded`
+- Request/stream lifecycle: `request.start`, `request.end`, `stream.start`, `stream.end`
+- Error aggregation via `pop_failures()`
+- `emit()` vs `emit_background()` for ordering guarantees
+
+**Pydantic at boundaries:**
+- 13 SSE event models replace raw dicts (type-safe event construction)
+- `AgentRequest` model with `extra="allow"` replaces manual dict validation
+- `RouteMeta` + `RouteParam` models validate at playground/OpenAPI boundary
+- `ResumeRequest` model validates interrupt resume body
+- Polished validation errors (user-friendly messages instead of raw dumps)
+
+**Missing features added:**
+- Tool result caching (`@tool(cache_ttl=N)`) — in-memory, keyed by args
+- Streaming tools (async generator `@tool` functions yield `tool_progress` SSE)
+- Multi-modal agent requests (`message: str | list[dict]`)
+- Structured output (`@app.agent(response_model=PydanticModel)`) with retry
+- Guardrails (`@app.agent(guardrails=[regex, ...])`) — prompt injection defense
+
+**Developer experience:**
+- Graph visualizer playground (dagre DAG, request replay, node inspector)
+- Scalar API docs at `/docs` (OpenAPI-based, try-it functionality)
+- Plugin system (`Yomai(plugins=[setup_fn, "module:path"])`, `@plugin` decorator)
+- OpenTelemetry tracing plugin (`yomai.contrib.opentelemetry`)
+- `yomai run --app-path` and `.env` auto-loading via python-dotenv
+- `yomai deploy` — containerize and ship to any cloud
+- Updated `yomai new` scaffold with hooks, workflows, and plugins
+
+**Examples:**
+- `customer_support` — multi-agent delegation, branching, tool caching, HITL
+- `research_pipeline` — shared state, parallel steps, quality gates, approvals
+- `code_review_bot` — static analysis, parallel review, async mode
+
+**Bug fixes:**
+- Budget `on_exceeded="warn"` now warns instead of stopping
+- Partial conversation saved on timeout cancellation
+- Health endpoint uses actual `__version__` instead of hardcoded "0.1.0"
+- Repeated `inspect.currentframe()` pattern extracted to helper
+
 ## 0.2.0
 
 ### Production readiness — 5-phase overhaul
