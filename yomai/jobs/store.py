@@ -130,6 +130,11 @@ class RedisJobStore:
         if self.ttl_secs > 0:
             await self.client.expire(key, self.ttl_secs)
 
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
 
 def _updated_record(
     current: JobRecord,

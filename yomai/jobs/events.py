@@ -154,3 +154,8 @@ class RedisJobEventStore:
         if not isinstance(data, dict):
             data = {"type": fields.get("event", "message"), "content": data}
         return StoredEvent(str(event_id), str(fields.get("event", data.get("type", "message"))), data)
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None

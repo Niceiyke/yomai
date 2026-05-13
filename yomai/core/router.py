@@ -69,6 +69,9 @@ def _get_annotation(handler: Callable[..., Any], name: str, param: inspect.Param
     return _handler_type_hints(handler).get(name, param.annotation)
 
 
+_SAFE_ANNOTATIONS = frozenset({str, int, float, bool, dict, UUID})
+
+
 def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
     """Coerce a JSON value to the annotated Python type."""
     if annotation is inspect.Signature.empty:
@@ -132,10 +135,13 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
             if value in literals:
                 return value
             raise ValueError(f"Invalid field {name}: must be one of {literals}")
-        try:
-            return TypeAdapter(annotation).validate_python(value)
-        except ValidationError:
-            raise ValueError(f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}") from None
+        # Allowlist: only validate safe primitive types and Pydantic models via TypeAdapter
+        if annotation in _SAFE_ANNOTATIONS or (inspect.isclass(annotation) and issubclass(annotation, (BaseModel, enum.Enum))):
+            try:
+                return TypeAdapter(annotation).validate_python(value)
+            except ValidationError:
+                raise ValueError(f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}") from None
+        raise ValueError(f"Unsupported field type for {name}: {annotation.__name__}")
 
     return value
 
@@ -193,7 +199,7 @@ class AgentRoute(BaseRoute):
         self.heartbeat_secs = heartbeat_secs
         self.system = system
         self.response_model = response_model
-        self.guardrails = guardrails or []
+        self.guardrails = [re.compile(p) for p in (guardrails or [])]
         self._budget_tracker: Any = None
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
@@ -221,7 +227,7 @@ class AgentRoute(BaseRoute):
             handler_kwargs = self._build_kwargs(body.model_dump(), message, session_id, path_kwargs, request)
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers()}
+        headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers(request)}
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         stream_log = StreamLog(request.method, self.path, session_id, "agent") if self.log_usage else None
 
@@ -250,12 +256,13 @@ class AgentRoute(BaseRoute):
 
                 # Guardrails: strip prompt injection patterns
                 for pattern in self.guardrails:
-                    user_message = re.sub(pattern, "[filtered]", user_message, flags=re.IGNORECASE)
+                    user_message = pattern.sub("[filtered]", user_message)
 
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
                     budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id,
-                    hooks=getattr(self, '_hooks', None))
+                    hooks=getattr(self, '_hooks', None),
+                    tool_cache=getattr(self, '_tool_cache', None))
                 async for sse in agent_loop.run(user_message, history=history, system=system):
                     await put_sse(sse)
 
@@ -288,6 +295,9 @@ class AgentRoute(BaseRoute):
 
         async def generate() -> AsyncIterator[str]:
             agent_task = asyncio.create_task(run_agent())
+            _stream_tasks = getattr(self, '_stream_tasks', None)
+            if _stream_tasks is not None:
+                _stream_tasks[session_id] = agent_task
             heartbeat_task = asyncio.create_task(heartbeat(queue, self.heartbeat_secs))
             started_at = time.monotonic()
             seq = 0
@@ -318,6 +328,8 @@ class AgentRoute(BaseRoute):
                     seq += 1
                     yield f"id: {seq}\n{item}"
             finally:
+                if _stream_tasks is not None:
+                    _stream_tasks.pop(session_id, None)
                 heartbeat_task.cancel()
                 if not agent_task.done():
                     agent_task.cancel()
@@ -332,11 +344,15 @@ class AgentRoute(BaseRoute):
 
     def _extract_json(self, text: str, model: type[BaseModel]) -> BaseModel:
         """Try to extract a JSON object from LLM output and validate against the model."""
-        import re
-        match = re.search(r"\{[\s\S]*\}", text)
-        if match:
-            return model.model_validate(json.loads(match.group()))
-        return model.model_validate(json.loads(text))
+        import json as json_lib
+        decoder = json_lib.JSONDecoder()
+        for match in re.finditer(r"\{", text):
+            try:
+                obj, _end = decoder.raw_decode(text[match.start():])
+                return model.model_validate(obj)
+            except (json_lib.JSONDecodeError, ValidationError):
+                continue
+        return model.model_validate(json_lib.loads(text))
 
     def _build_kwargs(
         self, body: dict[str, Any], message: str, session_id: str, path_kwargs: dict[str, Any], request: Request | None = None
@@ -408,7 +424,7 @@ class WorkflowRoute(BaseRoute):
             return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
 
         session_id = request.headers.get("X-Session-Id") or str(uuid.uuid4())
-        headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers()}
+        headers = {**SSE_HEADERS, "X-Session-Id": session_id, **self._cors_headers(request)}
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         stream_log = StreamLog(request.method, self.path, session_id, "workflow") if self.log_usage else None
 
@@ -437,8 +453,12 @@ class WorkflowRoute(BaseRoute):
 
         async def generate() -> AsyncIterator[str]:
             task = asyncio.create_task(run_workflow())
+            _stream_tasks = getattr(self, '_stream_tasks', None)
+            if _stream_tasks is not None:
+                _stream_tasks[session_id] = task
             heartbeat_task = asyncio.create_task(heartbeat(queue, self.app.config.streaming.heartbeat_secs))
             started_at = time.monotonic()
+            seq = 0
             if self.on_stream_start is not None:
                 self.on_stream_start()
             hooks = getattr(self, '_hooks', None)
@@ -451,7 +471,8 @@ class WorkflowRoute(BaseRoute):
                         timeout_sse = sse_error("Workflow request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
-                        yield timeout_sse
+                        seq += 1
+                        yield f"id: {seq}\n{timeout_sse}"
                         break
                     if await request.is_disconnected():
                         task.cancel()
@@ -462,8 +483,11 @@ class WorkflowRoute(BaseRoute):
                         continue
                     if item is None:
                         break
-                    yield item
+                    seq += 1
+                    yield f"id: {seq}\n{item}"
             finally:
+                if _stream_tasks is not None:
+                    _stream_tasks.pop(session_id, None)
                 heartbeat_task.cancel()
                 if not task.done():
                     task.cancel()
@@ -528,7 +552,9 @@ class GetRoute(BaseRoute):
         if inspect.isawaitable(result):
             result = await result
 
-        headers = {**self._cors_headers()}
+        result = self._maybe_validate_response(result, self.response_model)
+
+        headers = {**self._cors_headers(request)}
         if isinstance(result, JSONResponse):
             return result
         return JSONResponse(result, headers=headers)
@@ -564,7 +590,9 @@ class DeleteRoute(BaseRoute):
         if inspect.isawaitable(result):
             result = await result
 
-        headers = {**self._cors_headers()}
+        result = self._maybe_validate_response(result, self.response_model)
+
+        headers = {**self._cors_headers(request)}
         if isinstance(result, JSONResponse):
             return result
         return JSONResponse(result, headers=headers)
@@ -597,7 +625,7 @@ class HeadRoute(BaseRoute):
         if inspect.isawaitable(result):
             result = await result
 
-        headers = self._cors_headers()
+        headers = self._cors_headers(request)
         if isinstance(result, Response):
             return result
         return Response(status_code=200, headers=headers)
@@ -640,7 +668,9 @@ class PatchRoute(BaseRoute):
         if inspect.isawaitable(result):
             result = await result
 
-        headers = {**self._cors_headers()}
+        result = self._maybe_validate_response(result, self.response_model)
+
+        headers = {**self._cors_headers(request)}
         if isinstance(result, JSONResponse):
             return result
         return JSONResponse(result, headers=headers)
@@ -672,7 +702,6 @@ class PutRoute(BaseRoute):
             elif name in path_kwargs:
                 kwargs[name] = _coerce_value(path_kwargs[name], _get_annotation(self.handler, name, param), name)
             elif name == "session_id":
-                # Use header-based session_id if not a path parameter
                 kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in body:
                 kwargs[name] = _coerce_value(body[name], _get_annotation(self.handler, name, param), name)
@@ -683,7 +712,9 @@ class PutRoute(BaseRoute):
         if inspect.isawaitable(result):
             result = await result
 
-        headers = {**self._cors_headers()}
+        result = self._maybe_validate_response(result, self.response_model)
+
+        headers = {**self._cors_headers(request)}
         if isinstance(result, JSONResponse):
             return result
         return JSONResponse(result, headers=headers)
@@ -697,16 +728,21 @@ class OptionsRoute(BaseRoute):
 
         if self.should_accept is not None and not self.should_accept():
             return Response(status_code=503)
-        headers = {
+        origin = request.headers.get("Origin", "")
+        allow_origins = self.cors.get("allow_origins", [])
+        if isinstance(allow_origins, str):
+            allow_origins = [allow_origins]
+        headers: dict[str, str] = {
             "Access-Control-Allow-Methods": ", ".join(self.cors.get("allow_methods", ["GET", "POST", "OPTIONS"])),
             "Access-Control-Allow-Headers": ", ".join(self.cors.get("allow_headers", ["Content-Type", "Authorization", "X-Session-Id"])),
             "Access-Control-Max-Age": "3600",
         }
-        allow_origins = self.cors.get("allow_origins", [])
-        if isinstance(allow_origins, str):
-            allow_origins = [allow_origins]
-        if allow_origins:
-            headers["Access-Control-Allow-Origin"] = ", ".join(allow_origins)
+        if origin in allow_origins:
+            headers["Access-Control-Allow-Origin"] = origin
+        elif "*" in allow_origins:
+            headers["Access-Control-Allow-Origin"] = "*"
+        elif not origin and len(allow_origins) == 1:
+            headers["Access-Control-Allow-Origin"] = allow_origins[0]
         if self.cors.get("allow_credentials"):
             headers["Access-Control-Allow-Credentials"] = "true"
         return Response(status_code=200, headers=headers)

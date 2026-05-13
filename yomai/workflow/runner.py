@@ -20,8 +20,8 @@ from yomai.streaming.sse import (
     sse_interrupt,
     sse_tool_progress,
 )
-from yomai.tools.cache import _cache as _tool_cache
-from yomai.tools.registry import ToolFunction, _registry
+from yomai.tools.cache import ToolCache
+from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_step_done, sse_step_start
 
 if TYPE_CHECKING:
@@ -206,8 +206,9 @@ class WorkflowRunner:
 
         # Tool cache
         cache_ttl: int | None = getattr(fn, "_tool_cache_ttl", None)
-        if cache_ttl is not None:
-            cached = _tool_cache.get(tool_name, kwargs)
+        tool_cache = getattr(self.app, "_tool_cache", None)
+        if cache_ttl is not None and tool_cache is not None:
+            cached = tool_cache.get(tool_name, kwargs)
             if cached is not None:
                 duration_ms = int((time.monotonic() - start) * 1000)
                 result_str = str(cached)
@@ -242,8 +243,8 @@ class WorkflowRunner:
         await self.sse_queue.put(
             sse_graph_update(tool_id, "done", meta={"result": result_str[:200], "duration_ms": duration_ms})
         )
-        if cache_ttl is not None:
-            _tool_cache.set(tool_name, kwargs, result, cache_ttl)
+        if cache_ttl is not None and tool_cache is not None:
+            tool_cache.set(tool_name, kwargs, result, cache_ttl)
         return result
 
     # ------------------------------------------------------------------
@@ -279,6 +280,7 @@ class WorkflowRunner:
             budget_tracker=self.app.budget,
             session_id=self.session_id,
             hooks=self.app.hooks,
+            tool_cache=self.app._tool_cache,
         )
 
         try:
@@ -343,13 +345,11 @@ class WorkflowRunner:
         await self.interrupt(full_message, timeout_secs=timeout_secs)
 
         # After resolution, look up the interrupt for structured data
-        from datetime import datetime, timezone
-
-        interrupts = self.app._interrupt_store._interrupts
-        resolved = [i for i in interrupts.values() if i.status == "resolved" and i.response is not None]
-        if resolved:
-            latest = max(resolved, key=lambda i: i.resolved_at or datetime.min.replace(tzinfo=timezone.utc))
-            return latest.to_approval()
+        get_latest = getattr(self.app._interrupt_store, "get_latest_resolved", None)
+        if callable(get_latest):
+            latest = await get_latest()
+            if latest is not None:
+                return latest.to_approval()
 
         # Fallback: treat as approved
         return ApprovalResult(action="approved")
@@ -423,7 +423,6 @@ class WorkflowRunner:
         request_human_input.tool_name = "request_human_input"
         request_human_input._tool_timeout_secs = None
         request_human_input._tool_max_retries = 0
-        _registry.register(request_human_input)
         return request_human_input
 
     async def _run_agent(self, name: str, agent_fn: Callable[..., Any], input: str) -> str:
@@ -433,6 +432,7 @@ class WorkflowRunner:
         loop = AgentLoop(
             self.app._build_provider(), tools, self.app.config.agent, self.app.config.llm,
             budget_tracker=self.app.budget, session_id=self.session_id, hooks=self.app.hooks,
+            tool_cache=self.app._tool_cache,
         )
         async for sse in loop.run(input, history=history, system=""):
             await self.raise_if_cancelled()

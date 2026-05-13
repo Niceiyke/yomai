@@ -65,6 +65,11 @@ class RedisMemory(MemoryBackend):
     async def clear(self, session_id: str) -> None:
         await self.client.delete(self._key(session_id))
 
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
     async def _save_history(self, session_id: str, history: list[Message]) -> None:
         payload = json.dumps(history, separators=(",", ":"))
         key = self._key(session_id)

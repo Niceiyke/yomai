@@ -9,17 +9,13 @@ import pytest
 from yomai import Yomai, tool
 from yomai.config import LLMConfig, MemoryConfig
 from yomai.testing import MockToolCall, YomaiTestClient, mock_llm
-from yomai.tools.cache import _cache as _tool_cache
+from yomai.tools.cache import ToolCache
 from yomai.workflow import WorkflowRunner
 
 
 # -------------------------------------------------------------------
 # Tool result caching
 # -------------------------------------------------------------------
-
-@pytest.fixture(autouse=True)
-def _clear_tool_cache() -> None:
-    _tool_cache.clear()
 
 
 @pytest.mark.asyncio

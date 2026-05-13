@@ -93,6 +93,11 @@ class RedisCheckpointStore:
         else:
             await self.client.set(key, payload)
 
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None
+
 
 def _dt(value: str | None) -> datetime:
     if not value:

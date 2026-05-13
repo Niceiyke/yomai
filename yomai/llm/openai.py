@@ -9,7 +9,7 @@ from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
 from yomai.llm._retry import _is_transient
 from yomai.llm.base import Done, LLMEvent, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
-from yomai.tools.registry import ToolFunction, _registry
+from yomai.tools.registry import ToolFunction, get_schemas_for_openai
 
 
 class OpenAIProvider(LLMProvider):
@@ -34,7 +34,7 @@ class OpenAIProvider(LLMProvider):
         self.max_tokens = config.max_tokens
 
     def tool_schemas(self, tools: list[ToolFunction]) -> list[ToolSchema]:
-        return _registry.get_schemas_for_openai(tools)
+        return get_schemas_for_openai(tools)
 
     def tool_result_messages(self, tool_call: ToolCall, result: str) -> list[Message]:
         return [

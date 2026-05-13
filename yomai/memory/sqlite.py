@@ -67,9 +67,6 @@ class SqliteMemory(MemoryBackend):
             return [first, *history[-(self._max - 1):]]
         return history[-self._max:]
 
-    def _run_sync(self, fn: Any, *args: Any) -> Any:
-        return fn(*args)
-
     async def _load_sync(self, session_id: str) -> list[Message]:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self._do_load, session_id)

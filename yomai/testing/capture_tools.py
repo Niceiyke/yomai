@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from yomai.tools.registry import ToolFunction, _registry
+from yomai.core.agent import AgentLoop
+from yomai.streaming.sse import sse_tool_end
+from yomai.tools.registry import ToolFunction
 
 
 @dataclass(slots=True)
@@ -21,25 +22,19 @@ class CapturedToolCall:
 def capture_tools(return_value: str = "mocked tool result") -> Iterator[list[CapturedToolCall]]:
     """Record tool calls and return a fixed result without executing real tools."""
     calls: list[CapturedToolCall] = []
-    original_get = _registry.get
+    original_execute = AgentLoop._execute_tool_call
 
-    def fake_get(name: str) -> ToolFunction | None:
-        original = original_get(name)
-        if original is None:
-            return None
+    async def fake_execute(self, tool_call, messages, parent_llm_id):
+        call = CapturedToolCall(name=tool_call.name, args=dict(tool_call.args), result=return_value)
+        calls.append(call)
+        result_str = str(return_value)
+        messages.extend(self._tool_result_messages(tool_call, result_str))
+        tool_id = f"tool_{tool_call.name}_{tool_call.id}"
+        self._pending_tool_nodes.append(tool_id)
+        yield sse_tool_end(tool_call.id, result_str, 0)
 
-        async def wrapper(**kwargs: Any) -> str:
-            start = time.monotonic()
-            call = CapturedToolCall(name=name, args=dict(kwargs), result=return_value)
-            call.duration_ms = int((time.monotonic() - start) * 1000)
-            calls.append(call)
-            return return_value
-
-        wrapper.__name__ = getattr(original, "__name__", name)
-        return wrapper
-
-    _registry.get = fake_get  # type: ignore[method-assign]
+    AgentLoop._execute_tool_call = fake_execute  # type: ignore[method-assign]
     try:
         yield calls
     finally:
-        _registry.get = original_get  # type: ignore[method-assign]
+        AgentLoop._execute_tool_call = original_execute  # type: ignore[method-assign]

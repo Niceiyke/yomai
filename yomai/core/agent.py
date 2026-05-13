@@ -25,8 +25,8 @@ from yomai.streaming.sse import (
     sse_tool_start,
     sse_usage,
 )
-from yomai.tools.cache import _cache as _tool_cache
-from yomai.tools.registry import ToolFunction, _registry
+from yomai.tools.cache import ToolCache
+from yomai.tools.registry import ToolFunction
 
 
 def _message_text(message: str | list[dict[str, Any]]) -> str:
@@ -64,6 +64,7 @@ class AgentLoop:
         budget_tracker: BudgetTracker | None = None,
         session_id: str = "",
         hooks: HookRegistry | None = None,
+        tool_cache: ToolCache | None = None,
     ) -> None:
         self.provider = provider
         self.tools = tools
@@ -72,6 +73,7 @@ class AgentLoop:
         self.budget_tracker = budget_tracker
         self.session_id = session_id
         self.hooks = hooks
+        self.tool_cache = tool_cache
         self.last_reply: str = ""
         self.last_usage: Done = Done()
         self.strip_reasoning = llm_config.strip_reasoning if llm_config else False
@@ -83,7 +85,8 @@ class AgentLoop:
         if hasattr(self.provider, "tool_schemas"):
             provider = cast(ToolSchemaProvider, self.provider)
             return provider.tool_schemas(self.tools)
-        return _registry.get_schemas_for_anthropic(self.tools)
+        from yomai.tools.registry import get_schemas_for_anthropic
+        return get_schemas_for_anthropic(self.tools)
 
     def _estimate_cost(self, usage: Done) -> float:
         if not self.llm_config:
@@ -155,7 +158,7 @@ class AgentLoop:
 
                         # Budget check
                         if self.budget_tracker and self.session_id:
-                            result = self.budget_tracker.check(
+                            result = await self.budget_tracker.check(
                                 self.session_id,
                                 event.input_tokens,
                                 event.output_tokens,
@@ -258,20 +261,12 @@ class AgentLoop:
         yield sse_tool_start(tool_call.name, tool_call.args, tool_call.id)
         start = time.monotonic()
         result: Any
-        fn = _registry.get(tool_call.name) if tool_call.name in self._tool_map else None
-
-        # Progress callback for streaming tools
-        async def _emit_progress(msg: str) -> None:
-            """Called by tools to stream intermediate progress."""
-            # This is a closure capturing the parent generator — we can't await put_sse
-            # directly since _execute_tool_call is itself an async generator.
-            # We queue it via the graph update mechanism instead.
-            pass  # Implemented via sse_tool_progress in the caller
+        fn = self._tool_map.get(tool_call.name)
 
         # Check tool cache
         cache_ttl: int | None = getattr(fn, "_tool_cache_ttl", None) if fn is not None else None
-        if cache_ttl is not None and fn is not None:
-            cached = _tool_cache.get(tool_call.name, tool_call.args)
+        if cache_ttl is not None and fn is not None and self.tool_cache is not None:
+            cached = self.tool_cache.get(tool_call.name, tool_call.args)
             if cached is not None:
                 result = cached
                 duration_ms = int((time.monotonic() - start) * 1000)
@@ -346,8 +341,8 @@ class AgentLoop:
         self._pending_tool_nodes.append(tool_id)
 
         # Cache successful results
-        if cache_ttl is not None and fn is not None and not is_error:
-            _tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
+        if cache_ttl is not None and fn is not None and not is_error and self.tool_cache is not None:
+            self.tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
 
         if self.hooks is not None:
             self.hooks.emit_background("agent.tool_result", session_id=self.session_id,

@@ -20,7 +20,7 @@ def build_openapi(
         description = route.get("description", "")
         deprecated = route.get("deprecated", False)
         path_params = route.get("path_params", [])
-        route.get("body_params", [])
+        body_params = route.get("body_params", [])
         params = route.get("params", [])
 
         if route_type == "agent":
@@ -98,19 +98,22 @@ def build_openapi(
             if api_key:
                 post_spec["security"] = [{"ApiKeyAuth": []}]
 
-        elif route_type in ("get", "delete", "head", "options"):
+        elif route_type in ("get", "delete", "head", "options", "put", "patch"):
             # Non-streaming routes
+            method = {"options": "options", "head": "head", "put": "put", "patch": "patch"}.get(route_type, route_type)
+
             openapi_params: list[dict[str, Any]] = []
             for p in params:
                 pn = p["name"]
-                param_in = "path" if p.get("in") == "path" else "query"
-                openapi_params.append({
-                    "name": pn,
-                    "in": param_in,
-                    "required": p.get("required", True),
-                    "schema": _param_schema(p),
-                    "description": f"{'Path' if param_in == 'path' else 'Query'} parameter: {pn}",
-                })
+                param_in = p.get("in", "body")
+                if param_in in ("path", "query"):
+                    openapi_params.append({
+                        "name": pn,
+                        "in": param_in,
+                        "required": p.get("required", True),
+                        "schema": _param_schema(p),
+                        "description": f"{'Path' if param_in == 'path' else 'Query'} parameter: {pn}",
+                    })
 
             responses = {
                 "200": {"description": "Successful response"},
@@ -118,7 +121,12 @@ def build_openapi(
                 "503": {"description": "Server shutting down"},
             }
 
-            method = route_type if route_type != "options" else "get"
+            response_schema = route.get("response_model_schema")
+            if response_schema:
+                responses["200"]["content"] = {
+                    "application/json": {"schema": response_schema}
+                }
+
             post_spec = {
                 "summary": summary,
                 "tags": tags,
@@ -126,6 +134,32 @@ def build_openapi(
                 "deprecated": deprecated,
                 "responses": responses,
             }
+
+            # Add request body for patch/put (they accept JSON bodies)
+            if route_type in ("put", "patch"):
+                body_props: dict[str, Any] = {}
+                body_required: list[str] = []
+                for p in params:
+                    pn = p["name"]
+                    if p.get("in") == "body" or (pn not in path_params and pn not in [op["name"] for op in openapi_params]):
+                        body_props[pn] = _param_schema(p)
+                        if p.get("required", True):
+                            body_required.append(pn)
+
+                if body_props:
+                    post_spec["requestBody"] = {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": body_props,
+                                    "required": body_required,
+                                    "additionalProperties": False,
+                                }
+                            }
+                        },
+                    }
+
             if openapi_params:
                 post_spec["parameters"] = openapi_params
             if api_key:

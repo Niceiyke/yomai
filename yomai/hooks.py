@@ -61,7 +61,15 @@ class HookRegistry:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self.emit(name, **payload))
+        task = loop.create_task(self.emit(name, **payload))
+        task.add_done_callback(self._on_background_done)
+
+    def _on_background_done(self, task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            _log.warning("hook.background_failed", extra={"error": str(exc)}, exc_info=exc)
 
     def pop_failures(self) -> list[dict[str, Any]]:
         """Return and clear accumulated handler failures across all hooks."""

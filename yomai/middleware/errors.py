@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import os
 import traceback
 from typing import Any
@@ -13,6 +14,8 @@ class ErrorMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         try:
             return await call_next(request)
+        except asyncio.CancelledError:
+            raise
         except Exception as exc:
             if os.environ.get("YOMAI_ENV") != "production":
                 traceback.print_exc()

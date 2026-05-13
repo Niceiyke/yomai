@@ -115,6 +115,12 @@ class InMemoryInterruptStore:
         self._interrupts.pop(interrupt_id, None)
         self._events.pop(interrupt_id, None)
 
+    async def get_latest_resolved(self) -> Interrupt | None:
+        resolved = [i for i in self._interrupts.values() if i.status == "resolved" and i.response is not None]
+        if resolved:
+            return max(resolved, key=lambda i: i.resolved_at or datetime.min.replace(tzinfo=timezone.utc))
+        return None
+
 
 class RedisInterruptStore:
     """Redis-backed interrupt store for multi-worker deployments."""
@@ -184,3 +190,8 @@ class RedisInterruptStore:
         """Return a local Event for waiting (poll-based for Redis). The runner
         polls get() every 200ms until the interrupt is resolved."""
         return asyncio.Event()
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.aclose()
+            self._client = None

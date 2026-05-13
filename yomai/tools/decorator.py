@@ -4,7 +4,11 @@ import inspect
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar, get_args, get_origin, get_type_hints, overload
 
-from yomai.tools.registry import ToolSchema, _registry
+from pydantic import BaseModel, Field
+from pydantic.fields import FieldInfo
+from typing_extensions import get_origin as _get_origin_safe
+
+from yomai.tools.registry import ToolSchema
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -18,9 +22,34 @@ _TYPE_MAP: dict[type[Any], str] = {
 }
 
 
+def _unwrap_annotated(annotation: Any) -> Any:
+    """Unwrap Annotated[T, ...] to return T."""
+    origin = get_origin(annotation)
+    if origin is not None:
+        try:
+            if origin.__name__ == "Annotated":
+                args = get_args(annotation)
+                if args:
+                    return args[0]
+        except AttributeError:
+            pass
+    return annotation
+
+
+def _extract_description(annotation: Any) -> str:
+    """Extract Field description from Annotated[T, Field(description='...')]."""
+    if hasattr(annotation, "__metadata__"):
+        for meta in annotation.__metadata__:
+            if isinstance(meta, FieldInfo):
+                return meta.description or ""
+    return ""
+
+
 def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
     if annotation is inspect.Signature.empty:
         return {"type": "string"}
+
+    annotation = _unwrap_annotated(annotation)
 
     origin = get_origin(annotation)
     args = get_args(annotation)
@@ -28,8 +57,7 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
     if origin is Literal:
         values = list(args)
         base = type(values[0]) if values else str
-        schema = {"type": _TYPE_MAP.get(base, "string"), "enum": values}
-        return schema
+        return {"type": _TYPE_MAP.get(base, "string"), "enum": values}
 
     if origin is list or annotation is list:
         item_schema = _json_schema_for_annotation(args[0]) if args else {}
@@ -38,6 +66,25 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
             schema["items"] = item_schema
         return schema
 
+    if origin is set or annotation is set:
+        item_schema = _json_schema_for_annotation(args[0]) if args else {}
+        schema: ToolSchema = {"type": "array", "uniqueItems": True}
+        if item_schema:
+            schema["items"] = item_schema
+        return schema
+
+    if origin is tuple or annotation is tuple:
+        if not args:
+            return {"type": "array"}
+        if len(args) == 2 and args[1] is Ellipsis:
+            item_schema = _json_schema_for_annotation(args[0])
+            schema: ToolSchema = {"type": "array"}
+            if item_schema:
+                schema["items"] = item_schema
+            return schema
+        prefix_items = [_json_schema_for_annotation(a) for a in args]
+        return {"type": "array", "prefixItems": prefix_items, "minItems": len(prefix_items), "maxItems": len(prefix_items)}
+
     if origin is dict or annotation is dict:
         return {"type": "object"}
 
@@ -45,6 +92,16 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
         non_none = [arg for arg in args if arg is not type(None)]
         if non_none:
             return _json_schema_for_annotation(non_none[0])
+
+    if inspect.isclass(annotation):
+        import datetime
+        from uuid import UUID
+        if issubclass(annotation, BaseModel):
+            return annotation.model_json_schema()
+        if issubclass(annotation, (datetime.datetime, datetime.date)):
+            return {"type": "string", "format": "date-time"}
+        if annotation is UUID:
+            return {"type": "string", "format": "uuid"}
 
     return {"type": _TYPE_MAP.get(annotation, "string")}
 
@@ -58,7 +115,12 @@ def _build_schema(fn: Callable[..., Any]) -> ToolSchema:
     for name, param in signature.parameters.items():
         if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
             continue
-        properties[name] = _json_schema_for_annotation(type_hints.get(name, param.annotation))
+        annotation = type_hints.get(name, param.annotation)
+        prop_schema = _json_schema_for_annotation(annotation)
+        desc = _extract_description(annotation)
+        if desc:
+            prop_schema["description"] = desc
+        properties[name] = prop_schema
         if param.default is inspect.Signature.empty:
             required.append(name)
 
@@ -94,7 +156,6 @@ def tool(fn: F | None = None, *, cache_ttl: int | None = None, timeout_secs: int
         func._tool_timeout_secs = timeout_secs
         func._tool_max_retries = max_retries
         func._tool_cache_ttl = cache_ttl
-        _registry.register(func)
         return func
 
     if fn is None:

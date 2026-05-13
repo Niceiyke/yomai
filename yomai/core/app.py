@@ -38,6 +38,7 @@ from yomai.config import (
     StreamingConfig,
 )
 from yomai.core.router import AgentRoute, WorkflowRoute
+from yomai.core._base_route import AcceptCallback, BaseRoute, LifecycleCallback, resolve_dependency
 from yomai.devui.playground import get_playground_html
 from yomai.exceptions import YomaiConfigError, YomaiRouteError
 from yomai.hooks import HookHandler, HookRegistry
@@ -65,6 +66,7 @@ from yomai.openapi.schema import build_openapi
 from yomai.plugins import PluginSetup, load_plugins
 from yomai.queue.base import QueuedWorkflow
 from yomai.streaming.sse import format_sse_with_id
+from yomai.tools.cache import ToolCache
 from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_result
 from yomai.workflow.runner import WorkflowRunner
@@ -84,17 +86,15 @@ def _capture_type_locals(fn: Callable[..., Any]) -> None:
 
 
 class Depends:
-    """Dependency injection for route-level auth, rate-limiting, etc."""
+    """Dependency injection for route-level auth, rate-limiting, etc.
 
-    def __init__(
-        self,
-        callable: Callable[..., Any],
-        *,
-        use_cache: bool = True,
-    ) -> None:
+    Set ``use_cache=False`` to execute the callable on every dependency
+    resolution within the same request.
+    """
+
+    def __init__(self, callable: Callable[..., Any], *, use_cache: bool = True) -> None:
         self.callable = callable
         self.use_cache = use_cache
-        self._cache: Any = ...  # sentinel
 
     def __repr__(self) -> str:
         return f"Depends({self.callable.__name__})"
@@ -265,9 +265,13 @@ class Yomai:
         self._workflow_handlers: dict[str, Callable[..., Any]] = {}
         self._active_connections = 0
         self._draining = False
+        self._drained = asyncio.Event()
         self._routes_meta: list[dict[str, Any]] = []
         self._paths: set[str] = set()
         self._route_groups: list[RouteGroup] = []
+        self._tool_cache = ToolCache()
+        self._registered_routes: set[tuple[str, str]] = set()
+        self._stream_tasks: dict[str, asyncio.Task[Any]] = {}
         self._starlette = Starlette(
             routes=[
                 Route("/docs", self._api_docs, methods=["GET"]),
@@ -287,6 +291,7 @@ class Yomai:
                 Route("/__yomai__/jobs/{job_id}/cancel", self._job_cancel, methods=["POST"]),
                 Route("/__yomai__/interrupts/{interrupt_id}/resume", self._interrupt_resume, methods=["POST"]),
                 Route("/__yomai__/metrics", self._metrics, methods=["GET"]),
+                Route("/__yomai__/streams/{session_id}/cancel", self._stream_cancel, methods=["POST"]),
             ]
         )
         self._starlette.add_middleware(LoggingMiddleware, enabled=self.config.dev.log_usage)
@@ -464,6 +469,14 @@ class Yomai:
             }
         )
 
+    async def _stream_cancel(self, request: Request) -> JSONResponse:
+        session_id = request.path_params["session_id"]
+        task = self._stream_tasks.pop(session_id, None)
+        if task is not None and not task.done():
+            task.cancel()
+            return JSONResponse({"status": "cancelled", "session_id": session_id})
+        return JSONResponse({"error": "No active stream for session"}, status_code=404)
+
     async def _interrupt_resume(self, request: Request) -> JSONResponse:
         interrupt_id = request.path_params["interrupt_id"]
         try:
@@ -614,9 +627,7 @@ class Yomai:
                     await self.jobs.update_status(job_id, "succeeded", result=result)
                     await self.hooks.emit("workflow.done", job_id=job_id, route=path, result=result)
                     await self.hooks.emit("job.succeeded", job_id=job_id, route=path, result=result)
-                    released = self.rate_limiter.release_concurrent(session_id)
-                    if inspect.isawaitable(released):
-                        await released
+                    await self.rate_limiter.release_concurrent(session_id)
                     break  # Success
                 except asyncio.CancelledError:
                     raise
@@ -632,9 +643,7 @@ class Yomai:
                         await self.hooks.emit("workflow.failed", job_id=job_id, route=path, error=message_out)
                         await self.hooks.emit("job.failed", job_id=job_id, route=path, error=message_out)
                         await self.hooks.emit("error", job_id=job_id, route=path, error=message_out)
-                        released = self.rate_limiter.release_concurrent(session_id)
-                        if inspect.isawaitable(released):
-                            await released
+                    await self.rate_limiter.release_concurrent(session_id)
         finally:
             with contextlib.suppress(Exception):
                 await queue.put(None)
@@ -764,6 +773,8 @@ class Yomai:
             )
             route._budget_tracker = self.budget
             route._hooks = self.hooks
+            route._tool_cache = self._tool_cache
+            route._stream_tasks = self._stream_tasks
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
@@ -840,10 +851,7 @@ class Yomai:
                     }
                     request._yomai_path_kwargs = path_kwargs
                     for dep in dependencies or []:
-                        if hasattr(dep, "callable"):
-                            result = dep.callable(request)
-                            if inspect.isawaitable(result):
-                                await result
+                        await resolve_dependency(dep, request)
                     try:
                         body: Any = await read_json_body(request)
                     except Exception:
@@ -852,24 +860,20 @@ class Yomai:
                         return JSONResponse({"error": "Request body must be a JSON object"}, status_code=400)
 
                     session_id = request.headers.get("X-Session-Id") or str(uuid.uuid4())
-                    retry_after = self.rate_limiter.check_request(
+                    retry_after = await self.rate_limiter.check_request(
                         session_id,
                         self.config.rate_limits.requests_per_minute,
                     )
-                    if inspect.isawaitable(retry_after):
-                        retry_after = await retry_after
                     if retry_after is not None:
                         await self._incr_metric("errors_total")
                         return JSONResponse(
                             {"error": "Rate limit exceeded", "code": "rate_limited", "retry_after": retry_after},
                             status_code=429,
                         )
-                    acquired = self.rate_limiter.acquire_concurrent(
+                    acquired = await self.rate_limiter.acquire_concurrent(
                         session_id,
                         self.config.rate_limits.max_concurrent_per_session,
                     )
-                    if inspect.isawaitable(acquired):
-                        acquired = await acquired
                     if not acquired:
                         await self._incr_metric("errors_total")
                         return JSONResponse(
@@ -956,6 +960,7 @@ class Yomai:
                 auth=self._auth,
             )
             route._hooks = self.hooks
+            route._stream_tasks = self._stream_tasks
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             body_params = self._route_params(fn, injected={"runner", "request"}, path_params=path_params)
@@ -992,6 +997,7 @@ class Yomai:
         deprecated: bool = False,
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Non-streaming GET endpoint for reading data (e.g., session history)."""
         self._validate_new_path(path, method="GET")
@@ -1014,24 +1020,26 @@ class Yomai:
                 cors or {},
                 dependencies or [],
                 auth=self._auth,
+                response_model=response_model,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["GET"]))
             self._paths.add(path)
             params = self._route_params(fn, injected={"request"}, path_params=path_params)
-            self._routes_meta.append(
-                {
-                    "path": path,
-                    "type": "get",
-                    "params": params,
-                    "path_params": list(path_params),
-                    "injected_params": [],
-                    "tags": tags or ["get"],
-                    "summary": summary,
-                    "description": description,
-                    "deprecated": deprecated,
-                    "cors": cors,
-                }
-            )
+            meta_entry: dict[str, Any] = {
+                "path": path,
+                "type": "get",
+                "params": params,
+                "path_params": list(path_params),
+                "injected_params": [],
+                "tags": tags or ["get"],
+                "summary": summary,
+                "description": description,
+                "deprecated": deprecated,
+                "cors": cors,
+            }
+            if response_model is not None:
+                meta_entry["response_model_schema"] = response_model.model_json_schema()
+            self._routes_meta.append(meta_entry)
             return fn
 
         return decorator
@@ -1047,6 +1055,7 @@ class Yomai:
         deprecated: bool = False,
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Non-streaming DELETE endpoint (e.g., clear session)."""
         self._validate_new_path(path, method="DELETE")
@@ -1069,24 +1078,26 @@ class Yomai:
                 cors or {},
                 dependencies or [],
                 auth=self._auth,
+                response_model=response_model,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["DELETE"]))
             self._paths.add(path)
             params = self._route_params(fn, injected={"request"}, path_params=path_params)
-            self._routes_meta.append(
-                {
-                    "path": path,
-                    "type": "delete",
-                    "params": params,
-                    "path_params": list(path_params),
-                    "injected_params": [],
-                    "tags": tags or ["delete"],
-                    "summary": summary,
-                    "description": description,
-                    "deprecated": deprecated,
-                    "cors": cors,
-                }
-            )
+            meta_entry: dict[str, Any] = {
+                "path": path,
+                "type": "delete",
+                "params": params,
+                "path_params": list(path_params),
+                "injected_params": [],
+                "tags": tags or ["delete"],
+                "summary": summary,
+                "description": description,
+                "deprecated": deprecated,
+                "cors": cors,
+            }
+            if response_model is not None:
+                meta_entry["response_model_schema"] = response_model.model_json_schema()
+            self._routes_meta.append(meta_entry)
             return fn
 
         return decorator
@@ -1174,6 +1185,7 @@ class Yomai:
         deprecated: bool = False,
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Non-streaming PUT endpoint for full replacement."""
         self._validate_new_path(path, method="PUT")
@@ -1196,24 +1208,26 @@ class Yomai:
                 cors or {},
                 dependencies or [],
                 auth=self._auth,
+                response_model=response_model,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["PUT"]))
             self._paths.add(path)
             params = self._route_params(fn, injected={"request"}, path_params=path_params)
-            self._routes_meta.append(
-                {
-                    "path": path,
-                    "type": "put",
-                    "params": params,
-                    "path_params": list(path_params),
-                    "injected_params": [],
-                    "tags": tags or ["put"],
-                    "summary": summary,
-                    "description": description,
-                    "deprecated": deprecated,
-                    "cors": cors,
-                }
-            )
+            meta_entry: dict[str, Any] = {
+                "path": path,
+                "type": "put",
+                "params": params,
+                "path_params": list(path_params),
+                "injected_params": [],
+                "tags": tags or ["put"],
+                "summary": summary,
+                "description": description,
+                "deprecated": deprecated,
+                "cors": cors,
+            }
+            if response_model is not None:
+                meta_entry["response_model_schema"] = response_model.model_json_schema()
+            self._routes_meta.append(meta_entry)
             return fn
 
         return decorator
@@ -1229,6 +1243,7 @@ class Yomai:
         deprecated: bool = False,
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
+        response_model: type[BaseModel] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Non-streaming PATCH endpoint for partial updates."""
         self._validate_new_path(path, method="PATCH")
@@ -1251,24 +1266,26 @@ class Yomai:
                 cors or {},
                 dependencies or [],
                 auth=self._auth,
+                response_model=response_model,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["PATCH"]))
             self._paths.add(path)
             params = self._route_params(fn, injected={"request"}, path_params=path_params)
-            self._routes_meta.append(
-                {
-                    "path": path,
-                    "type": "patch",
-                    "params": params,
-                    "path_params": list(path_params),
-                    "injected_params": [],
-                    "tags": tags or ["patch"],
-                    "summary": summary,
-                    "description": description,
-                    "deprecated": deprecated,
-                    "cors": cors,
-                }
-            )
+            meta_entry: dict[str, Any] = {
+                "path": path,
+                "type": "patch",
+                "params": params,
+                "path_params": list(path_params),
+                "injected_params": [],
+                "tags": tags or ["patch"],
+                "summary": summary,
+                "description": description,
+                "deprecated": deprecated,
+                "cors": cors,
+            }
+            if response_model is not None:
+                meta_entry["response_model_schema"] = response_model.model_json_schema()
+            self._routes_meta.append(meta_entry)
             return fn
 
         return decorator
@@ -1345,6 +1362,8 @@ class Yomai:
 
     def _stream_finished(self) -> None:
         self._active_connections = max(0, self._active_connections - 1)
+        if self._active_connections <= 0 and self._draining:
+            self._drained.set()
 
     async def _get_active_connections(self) -> int:
         async with self._active_lock:
@@ -1376,14 +1395,14 @@ class Yomai:
         loop.create_task(self._drain_active_connections())
 
     async def _drain_active_connections(self) -> None:
-        deadline = asyncio.get_running_loop().time() + self.config.streaming.shutdown_timeout_secs
-        while True:
-            async with self._active_lock:
-                if self._active_connections <= 0:
-                    break
-            if asyncio.get_running_loop().time() >= deadline:
-                break
-            await asyncio.sleep(0.1)
+        timeout = self.config.streaming.shutdown_timeout_secs
+        try:
+            await asyncio.wait_for(self._drained.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            for session_id, task in list(self._stream_tasks.items()):
+                if not task.done():
+                    task.cancel()
+            self._stream_tasks.clear()
 
     def _validate_new_path(self, path: str, method: str | None = None) -> None:
         """Validate that a route path+method is available.
@@ -1392,19 +1411,37 @@ class Yomai:
         """
         if not path.startswith("/"):
             raise YomaiRouteError("Route path must start with '/'.")
-        # Check for existing route with same path+method
-        for r in self._starlette.router.routes:
-            route_path = getattr(r, 'path', '')
-            if route_path == path:
-                r_methods = getattr(r, 'methods', set())
-                if method and method in r_methods:
-                    raise YomaiRouteError(f"Route already registered: {path} ({method})")
-                # Same path with different method is OK
-        # Path is added to _paths for uniqueness tracking
-        self._paths.add(path)
+        if method and (path, method) in self._registered_routes:
+            raise YomaiRouteError(f"Route already registered: {path} ({method})")
+        if method:
+            self._registered_routes.add((path, method))
 
     def add_middleware(self, middleware_class: type[Any], **kwargs: Any) -> None:
         self._starlette.add_middleware(middleware_class, **kwargs)
+
+    async def close(self) -> None:
+        if isinstance(self.memory, RedisMemory):
+            await self.memory.close()
+
+        if isinstance(self.jobs, RedisJobStore):
+            await self.jobs.close()
+
+        if isinstance(self.job_events, RedisJobEventStore):
+            await self.job_events.close()
+
+        if isinstance(self.checkpoints, RedisCheckpointStore):
+            await self.checkpoints.close()
+
+        from yomai.jobs.interrupts import RedisInterruptStore
+
+        if isinstance(self._interrupt_store, RedisInterruptStore):
+            await self._interrupt_store.close()
+
+        if self._queue_backend is not None:
+            await self._queue_backend.close()
+
+        if isinstance(self.rate_limiter, RedisRateLimiter):
+            await self.rate_limiter.close()
 
     async def __call__(self, scope: dict[str, Any], receive: Callable[..., Any], send: Callable[..., Any]) -> None:
         await self._starlette(scope, receive, send)

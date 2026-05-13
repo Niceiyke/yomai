@@ -115,3 +115,9 @@ class SwiftQQueueBackend:
             with_scheduler=with_scheduler,
             worker_id=worker_id,
         )
+
+    async def close(self) -> None:
+        conn = getattr(self.queue, "connection", None)
+        if conn is not None:
+            await conn.aclose()
+        self.queue = None
