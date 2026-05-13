@@ -21,6 +21,7 @@ from yomai.streaming.sse import (
     sse_graph_update,
     sse_graph_upsert,
     sse_tool_end,
+    sse_tool_progress,
     sse_tool_start,
     sse_usage,
 )
@@ -301,7 +302,15 @@ class AgentLoop:
                     signature = inspect.signature(fn)
                     bound = signature.bind(**tool_call.args)
                     self._validate_tool_args(fn, bound.arguments)
-                    if inspect.iscoroutinefunction(fn):
+                    if inspect.isasyncgenfunction(fn):
+                        # Streaming tool: async generator, last yield = result
+                        chunks: list[str] = []
+                        async for chunk in fn(**tool_call.args):
+                            chunk_str = str(chunk)
+                            chunks.append(chunk_str)
+                            yield sse_tool_progress(tool_call.id, chunk_str)
+                        result = chunks[-1] if chunks else ""
+                    elif inspect.iscoroutinefunction(fn):
                         if timeout:
                             result = await asyncio.wait_for(fn(**tool_call.args), timeout=timeout)
                         else:

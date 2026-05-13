@@ -15,6 +15,7 @@ from collections.abc import Callable
 from typing import Any
 from uuid import UUID
 
+from pydantic import BaseModel
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
@@ -724,6 +725,8 @@ class Yomai:
         deprecated: bool = False,
         cors: dict[str, Any] | None = None,
         dependencies: list[Depends] | None = None,
+        response_model: type[BaseModel] | None = None,
+        guardrails: list[str] | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         self._validate_new_path(path, method="POST")  # POST for agent
         path_params = self._extract_path_params(path)
@@ -750,6 +753,8 @@ class Yomai:
                 cors or {},
                 dependencies or [],
                 auth=self._auth,
+                response_model=response_model,
+                guardrails=guardrails or [],
             )
             route._budget_tracker = self.budget
             route._hooks = self.hooks

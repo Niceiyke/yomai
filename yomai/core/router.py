@@ -4,6 +4,8 @@ import asyncio
 import datetime
 import enum
 import inspect
+import json
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -27,6 +29,18 @@ from yomai.streaming.sse import heartbeat, sse_done, sse_error
 from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_result
 from yomai.workflow.runner import WorkflowRunner
+
+
+def _format_validation_error(exc: Exception) -> dict[str, str]:
+    """Produce a user-friendly error dict from a Pydantic ValidationError."""
+    from pydantic import ValidationError
+    if isinstance(exc, ValidationError):
+        messages: list[str] = []
+        for err in exc.errors():
+            loc = " → ".join(str(p) for p in err["loc"])
+            messages.append(f"{loc}: {err['msg']}")
+        return {"error": "; ".join(messages)}
+    return {"error": str(exc)}
 
 # Reusable type adapters for common types
 _UUID_ADAPTER = TypeAdapter(UUID)
@@ -155,6 +169,8 @@ class AgentRoute(BaseRoute):
         cors: dict[str, Any] | None = None,
         dependencies: list[Any] | None = None,
         auth: AuthBackend | None = None,
+        response_model: type[BaseModel] | None = None,
+        guardrails: list[str] | None = None,
     ) -> None:
         super().__init__(
             path=path,
@@ -176,6 +192,8 @@ class AgentRoute(BaseRoute):
         self.provider_factory = provider_factory
         self.heartbeat_secs = heartbeat_secs
         self.system = system
+        self.response_model = response_model
+        self.guardrails = guardrails or []
         self._budget_tracker: Any = None
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
@@ -194,7 +212,7 @@ class AgentRoute(BaseRoute):
         try:
             body = AgentRequest.model_validate(raw)
         except Exception as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
+            return JSONResponse(_format_validation_error(exc), status_code=400)
 
         message = body.message
 
@@ -230,12 +248,34 @@ class AgentRoute(BaseRoute):
                     if handler_result.get("message"):
                         user_message = str(handler_result["message"])
 
+                # Guardrails: strip prompt injection patterns
+                for pattern in self.guardrails:
+                    user_message = re.sub(pattern, "[filtered]", user_message, flags=re.IGNORECASE)
+
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
                     budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id,
                     hooks=getattr(self, '_hooks', None))
                 async for sse in agent_loop.run(user_message, history=history, system=system):
                     await put_sse(sse)
+
+                # Structured output: validate and retry on JSON mismatch
+                if self.response_model is not None and agent_loop is not None:
+                    for retry in range(3):
+                        try:
+                            validated = self._extract_json(agent_loop.last_reply, self.response_model)
+                            await put_sse(sse_result(json.dumps(validated.model_dump())))
+                            break
+                        except Exception:
+                            if retry < 2:
+                                retry_prompt = (
+                                    f"Your last response was not valid JSON matching the required schema. "
+                                    f"Please respond with ONLY a JSON object. Schema: {json.dumps(self.response_model.model_json_schema())}\n"
+                                )
+                                async for sse in agent_loop.run(retry_prompt, history=history, system=system):
+                                    await put_sse(sse)
+                            else:
+                                await put_sse(sse_error("Failed to produce valid structured output after 3 attempts", "schema_error"))
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -289,6 +329,14 @@ class AgentRoute(BaseRoute):
                     stream_log.emit()
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
+
+    def _extract_json(self, text: str, model: type[BaseModel]) -> BaseModel:
+        """Try to extract a JSON object from LLM output and validate against the model."""
+        import re
+        match = re.search(r"\{[\s\S]*\}", text)
+        if match:
+            return model.model_validate(json.loads(match.group()))
+        return model.model_validate(json.loads(text))
 
     def _build_kwargs(
         self, body: dict[str, Any], message: str, session_id: str, path_kwargs: dict[str, Any], request: Request | None = None

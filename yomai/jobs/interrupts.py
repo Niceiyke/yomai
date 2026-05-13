@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -113,3 +114,73 @@ class InMemoryInterruptStore:
     async def delete(self, interrupt_id: str) -> None:
         self._interrupts.pop(interrupt_id, None)
         self._events.pop(interrupt_id, None)
+
+
+class RedisInterruptStore:
+    """Redis-backed interrupt store for multi-worker deployments."""
+
+    def __init__(self, url: str, *, prefix: str = "yomai", ttl_secs: int = 3600, client: Any | None = None) -> None:
+        self.url = url
+        self.prefix = prefix.rstrip(":")
+        self.ttl_secs = ttl_secs
+        self._client = client
+
+    @property
+    def client(self) -> Any:
+        if self._client is None:
+            try:
+                from redis import asyncio as redis_asyncio  # type: ignore[import-not-found]
+            except Exception as exc:
+                from yomai.exceptions import YomaiConfigError
+                raise YomaiConfigError(
+                    "Redis interrupt store requires redis to be installed.",
+                    hint="Install Yomai with redis extras.",
+                ) from exc
+            self._client = redis_asyncio.from_url(self.url, decode_responses=True)
+        return self._client
+
+    def _key(self, interrupt_id: str) -> str:
+        return f"{self.prefix}:interrupts:{interrupt_id}"
+
+    async def create(self, interrupt: Interrupt) -> None:
+        key = self._key(interrupt.id)
+        data = json.dumps({"id": interrupt.id, "job_id": interrupt.job_id, "message": interrupt.message,
+                           "status": "pending", "created_at": interrupt.created_at.isoformat()})
+        await self.client.set(key, data, ex=self.ttl_secs)
+
+    async def get(self, interrupt_id: str) -> Interrupt | None:
+        raw = await self.client.get(self._key(interrupt_id))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return Interrupt(id=data["id"], job_id=data["job_id"], message=data["message"],
+                         status=data.get("status", "pending"), response=data.get("response"),
+                         action=data.get("action"), comment=data.get("comment", ""),
+                         resolved_by=data.get("resolved_by", ""))
+
+    async def resolve(self, interrupt_id: str, response: str, *, action: str | None = None,
+                      comment: str = "", resolved_by: str = "") -> bool:
+        key = self._key(interrupt_id)
+        current = await self.get(interrupt_id)
+        if current is None or current.status != "pending":
+            return False
+        data = json.dumps({
+            "id": interrupt_id, "job_id": current.job_id, "message": current.message,
+            "status": "resolved", "response": response, "action": action,
+            "comment": comment, "resolved_by": resolved_by,
+            "created_at": current.created_at.isoformat(),
+            "resolved_at": datetime.now(timezone.utc).isoformat(),
+        })
+        await self.client.set(key, data, ex=self.ttl_secs)
+        return True
+
+    async def delete(self, interrupt_id: str) -> None:
+        await self.client.delete(self._key(interrupt_id))
+
+    def event(self, interrupt_id: str) -> asyncio.Event:
+        """Return a local Event for waiting (poll-based for Redis). The runner
+        polls get() every 200ms until the interrupt is resolved."""
+        return asyncio.Event()

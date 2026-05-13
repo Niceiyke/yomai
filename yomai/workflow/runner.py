@@ -371,12 +371,24 @@ class WorkflowRunner:
         await self.sse_queue.put(sse_interrupt(interrupt_id, message))
 
         # Wait for resolution
-        event = self.app._interrupt_store.event(interrupt_id)
+        is_redis = type(self.app._interrupt_store).__name__ == "RedisInterruptStore"
         try:
-            if timeout_secs:
-                await asyncio.wait_for(event.wait(), timeout=timeout_secs)
+            if is_redis:
+                # Poll Redis every 200ms until resolved
+                deadline = asyncio.get_running_loop().time() + (timeout_secs or 3600)
+                while asyncio.get_running_loop().time() < deadline:
+                    resolved = await self.app._interrupt_store.get(interrupt_id)
+                    if resolved and resolved.status == "resolved":
+                        return resolved.response or ""
+                    await asyncio.sleep(0.2)
+                await self.app._interrupt_store.delete(interrupt_id)
+                raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out after {timeout_secs}s")
             else:
-                await event.wait()
+                event = self.app._interrupt_store.event(interrupt_id)
+                if timeout_secs:
+                    await asyncio.wait_for(event.wait(), timeout=timeout_secs)
+                else:
+                    await event.wait()
         except asyncio.TimeoutError as exc:
             await self.app._interrupt_store.delete(interrupt_id)
             raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out after {timeout_secs}s") from exc
