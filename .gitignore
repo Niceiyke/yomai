@@ -15,6 +15,7 @@ build/
 *.egg-info/
 yomai_sessions.db
 support_sessions.db
+research_sessions.db
 *.db-journal
 *.db-wal
 
