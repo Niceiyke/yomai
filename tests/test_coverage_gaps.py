@@ -578,10 +578,8 @@ class TestStreamCancellation:
             provider.config = app.config.llm
             return provider
 
-        # Patch route's provider factory
-        for route in app._starlette.router.routes:
-            if hasattr(route, "provider_factory"):
-                route.provider_factory = hanging_factory  # type: ignore[attr-defined]
+        # Patch the app's provider factory so the agent stream hangs
+        app._build_provider = hanging_factory  # type: ignore[method-assign]
 
         client = YomaiTestClient(app)
 

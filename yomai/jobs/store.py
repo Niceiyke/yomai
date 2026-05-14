@@ -91,20 +91,20 @@ class RedisJobStore:
         key = self._key(record.id)
         idx_key = self._index_key()
         for _retry in range(3):
-            await self.client.watch(key)
+            pipe = self.client.pipeline(transaction=True)
+            await pipe.watch(key)
             if await self.client.exists(key):
-                await self.client.unwatch()
                 raw = await self.client.hgetall(key)
                 if raw:
                     return _record_from_redis(raw)
                 continue
-            tr = self.client.multi()
-            tr.hset(key, mapping=_record_to_redis(record))
-            tr.sadd(idx_key, record.id)
+            pipe.multi()
+            pipe.hset(key, mapping=_record_to_redis(record))
+            pipe.sadd(idx_key, record.id)
             if self.ttl_secs > 0:
-                tr.expire(key, self.ttl_secs)
-                tr.expire(idx_key, self.ttl_secs)
-            exec_result = await tr.execute()
+                pipe.expire(key, self.ttl_secs)
+                pipe.expire(idx_key, self.ttl_secs)
+            exec_result = await pipe.execute()
             if exec_result is not None:
                 return record
         return record
@@ -125,19 +125,20 @@ class RedisJobStore:
     ) -> JobRecord | None:
         key = self._key(job_id)
         for _retry in range(3):
-            await self.client.watch(key)
+            pipe = self.client.pipeline(transaction=True)
+            await pipe.watch(key)
             raw = await self.client.hgetall(key)
             if not raw:
-                await self.client.unwatch()
+                await pipe.reset()
                 return None
             current = _record_from_redis(raw)
             updated = _updated_record(current, status, result=result, error=error)
             data = _record_to_redis(updated)
-            tr = self.client.multi()
-            tr.hset(key, mapping=data)
+            pipe.multi()
+            pipe.hset(key, mapping=data)
             if self.ttl_secs > 0:
-                tr.expire(key, self.ttl_secs)
-            exec_result = await tr.execute()
+                pipe.expire(key, self.ttl_secs)
+            exec_result = await pipe.execute()
             if exec_result is not None:
                 return updated
         return None

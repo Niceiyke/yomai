@@ -344,6 +344,33 @@ class AgentLoop:
                         error=False,
                     )
                 return
+            # Reserve the key so concurrent callers wait instead of duplicating work
+            if not await self.tool_cache.reserve(tool_call.name, tool_call.args):
+                # Another caller is computing — re-check cache after it finishes
+                cached = await self.tool_cache.get(tool_call.name, tool_call.args)
+                if cached is not None:
+                    result = cached
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    result_str = str(result)
+                    yield sse_graph_update(
+                        tool_id,
+                        "done",
+                        meta={"result": result_str[:200], "duration_ms": duration_ms, "cached": True},
+                    )
+                    yield sse_tool_end(tool_call.id, result_str, duration_ms)
+                    messages.extend(self._tool_result_messages(tool_call, result_str))
+                    self._pending_tool_nodes.append(tool_id)
+                    if self.hooks is not None:
+                        self.hooks.emit_background(
+                            "agent.tool_result",
+                            session_id=self.session_id,
+                            tool_name=tool_call.name,
+                            tool_id=tool_call.id,
+                            result=result_str[:200],
+                            duration_ms=duration_ms,
+                            error=False,
+                        )
+                    return
 
         result: Any = ""
         if fn is None:

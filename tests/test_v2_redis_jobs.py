@@ -11,30 +11,23 @@ class FakeRedis:
         self.sets: dict[str, set[str]] = {}
         self.expired: list[tuple[str, int]] = []
         self._watched: set[str] = set()
-        self._tx: FakeTx | None = None
 
     async def hset(self, key: str, mapping: dict[str, str]) -> None:
         self.hashes[key] = dict(mapping)
-        if self._tx is not None:
-            self._tx._commands.append(("hset", key, mapping))
 
     async def hgetall(self, key: str) -> dict[str, str]:
         return dict(self.hashes.get(key, {}))
 
     async def sadd(self, key: str, value: str) -> None:
         self.sets.setdefault(key, set()).add(value)
-        if self._tx is not None:
-            self._tx._commands.append(("sadd", key, value))
 
     async def smembers(self, key: str) -> set[str]:
         return set(self.sets.get(key, set()))
 
     async def expire(self, key: str, ttl: int) -> None:
         self.expired.append((key, ttl))
-        if self._tx is not None:
-            self._tx._commands.append(("expire", key, ttl))
 
-    async def watch(self, key: str) -> None:
+    async def watch(self, key: str) -> None:  # noqa: ARG002
         self._watched.add(key)
 
     async def unwatch(self) -> None:
@@ -44,8 +37,10 @@ class FakeRedis:
         return key in self.hashes or key in self.sets
 
     def multi(self) -> FakeTx:
-        self._tx = FakeTx(self)
-        return self._tx
+        return FakeTx(self)
+
+    def pipeline(self, transaction: bool = True) -> FakePipeline:  # noqa: ARG002
+        return FakePipeline(self)
 
 
 class FakeTx:
@@ -66,7 +61,6 @@ class FakeTx:
         self._commands.append(("expire", key, ttl))
 
     async def execute(self) -> list | None:
-        self._parent._tx = None
         for cmd in self._commands:
             if cmd[0] == "hset":
                 self._parent.hashes[cmd[1]] = dict(cmd[2])
@@ -77,6 +71,41 @@ class FakeTx:
             elif cmd[0] == "set":
                 self._parent.hashes[cmd[1]] = {"_set_value": cmd[2]}
         return [True]
+
+
+class FakePipeline:
+    def __init__(self, parent: FakeRedis) -> None:
+        self._parent = parent
+        self._tx: FakeTx | None = None
+        self._watched: set[str] = set()
+
+    async def watch(self, key: str) -> None:
+        self._watched.add(key)
+
+    def multi(self) -> FakeTx:
+        self._tx = FakeTx(self._parent)
+        return self._tx
+
+    def hset(self, key: str, mapping: dict[str, str]) -> None:
+        if self._tx is not None:
+            self._tx.hset(key, mapping)
+
+    def sadd(self, key: str, value: str) -> None:
+        if self._tx is not None:
+            self._tx.sadd(key, value)
+
+    def expire(self, key: str, ttl: int) -> None:
+        if self._tx is not None:
+            self._tx.expire(key, ttl)
+
+    async def execute(self) -> list | None:
+        if self._tx is not None:
+            return await self._tx.execute()
+        return None
+
+    async def reset(self) -> None:
+        self._tx = None
+        self._watched.clear()
 
 
 @pytest.mark.asyncio

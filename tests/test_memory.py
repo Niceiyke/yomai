@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import tempfile
+import time
 from typing import Any
 
 import pytest
@@ -277,8 +278,8 @@ class TestDictMemoryEdgeCases:
     async def test_evict_expired_removes_all_expired(self) -> None:
         be = DictMemory(ttl_hours=-1)  # ttl disabled
         await be.save("keep", "hello", "world")
-        # Manually set an entry with old timestamp
-        be._store["old"] = (0, [{"role": "user", "content": "stale"}])
+        # Manually set an entry with a timestamp far in the past
+        be._store["old"] = (time.monotonic() - 2000, [{"role": "user", "content": "stale"}])
         # Set ttl to make it expire
         be._ttl_secs = 1000  # anything older than 1000s ago
         hist = await be.load("old")

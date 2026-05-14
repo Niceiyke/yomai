@@ -35,6 +35,7 @@ class ToolCache:
         self._store: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._maxsize = max(maxsize, 1)
         self._lock = asyncio.Lock()
+        self._pending: dict[str, asyncio.Event] = {}
 
     @staticmethod
     def _key(tool_name: str, args: dict[str, Any]) -> str:
@@ -64,6 +65,28 @@ class ToolCache:
                 while len(self._store) >= self._maxsize:
                     self._store.popitem(last=False)
             self._store[key] = (expiry, value)
+            pending = self._pending.pop(key, None)
+            if pending is not None:
+                pending.set()
 
-    def clear(self) -> None:
-        self._store.clear()
+    async def reserve(self, tool_name: str, args: dict[str, Any]) -> bool:
+        """Reserve a key for pending computation. Returns True if the caller
+        should proceed; returns False and waits for the result if another
+        caller is already computing it.
+
+        Callers that receive False should call ``get()`` again after this
+        returns to retrieve the freshly cached result.
+        """
+        key = self._key(tool_name, args)
+        wait_event: asyncio.Event | None = None
+        async with self._lock:
+            if key in self._store:
+                return False
+            if key in self._pending:
+                wait_event = self._pending[key]
+            else:
+                self._pending[key] = asyncio.Event()
+                return True
+        if wait_event is not None:
+            await wait_event.wait()
+        return False
