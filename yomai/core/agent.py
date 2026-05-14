@@ -5,7 +5,7 @@ import functools
 import inspect
 import time
 from collections.abc import AsyncGenerator
-from typing import TYPE_CHECKING, Any, Protocol, cast, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Protocol, cast, get_args, get_origin, get_type_hints
 
 if TYPE_CHECKING:
     from yomai.budget import BudgetTracker
@@ -317,7 +317,6 @@ class AgentLoop:
                     bound = signature.bind(**tool_call.args)
                     self._validate_tool_args(fn, bound.arguments)
                     if inspect.isasyncgenfunction(fn):
-                        # Streaming tool: async generator, last yield = result
                         chunks: list[str] = []
                         async for chunk in fn(**tool_call.args):
                             chunk_str = str(chunk)
@@ -338,6 +337,8 @@ class AgentLoop:
                         else:
                             result = await asyncio.to_thread(functools.partial(fn, **tool_call.args))
                     break  # Success
+                except asyncio.CancelledError:
+                    raise
                 except asyncio.TimeoutError:
                     result = f"Error: Tool {tool_call.name!r} timed out after {timeout}s"
                     if attempt < max_retries:
@@ -369,7 +370,13 @@ class AgentLoop:
                 result=result_str[:200], duration_ms=duration_ms, error=is_error)
 
     def _validate_tool_args(self, fn: ToolFunction, args: dict[str, Any]) -> None:
-        hints = getattr(fn, "__annotations__", {})
+        hints: dict[str, Any] = {}
+        try:
+            hints = get_type_hints(fn, include_extras=False)
+        except Exception:
+            pass
+        if not hints:
+            hints = getattr(fn, "__annotations__", {})
         for name, value in args.items():
             expected = hints.get(name)
             if expected is None:
@@ -377,6 +384,14 @@ class AgentLoop:
 
             origin = get_origin(expected)
             arg_types = get_args(expected)
+
+            if origin is not None and hasattr(origin, "__name__") and origin.__name__ == "Annotated" and arg_types:
+                expected = arg_types[0]
+                origin = get_origin(expected)
+                arg_types = get_args(expected)
+
+            if origin is None:
+                continue
 
             # Generic list[T]
             if origin is list and arg_types:
@@ -395,12 +410,28 @@ class AgentLoop:
                     raise TypeError(f"Tool argument {name!r} must be a dict")
                 continue
 
-            # Union / Optional[T]
-            if origin is not None and type(None) in arg_types:
-                if value is not None:
-                    non_none = [a for a in arg_types if a is not type(None)]
-                    if non_none and isinstance(non_none[0], type) and not isinstance(value, non_none[0]):
-                        raise TypeError(f"Tool argument {name!r} must be {non_none[0].__name__}")
+            # Union / Optional[T] — try each member
+            if origin is not None and len(arg_types) > 0:
+                if value is None and type(None) in arg_types:
+                    continue
+                non_none = [a for a in arg_types if a is not type(None)]
+                for candidate in non_none:
+                    candidate_origin = get_origin(candidate)
+                    if candidate_origin is None and isinstance(candidate, type):
+                        if isinstance(value, candidate):
+                            break
+                    elif candidate_origin is list:
+                        if isinstance(value, list):
+                            break
+                    elif candidate_origin is dict:
+                        if isinstance(value, dict):
+                            break
+                else:
+                    if non_none:
+                        type_names = ", ".join(
+                            getattr(a, "__name__", str(a)) for a in non_none if isinstance(a, type)
+                        ) or "matching type"
+                        raise TypeError(f"Tool argument {name!r} must be one of: {type_names}")
                 continue
 
             # Bare type

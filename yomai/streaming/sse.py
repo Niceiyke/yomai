@@ -17,6 +17,7 @@ from yomai.streaming.schemas import (
     InterruptData,
     PingData,
     ToolEndData,
+    ToolProgressData,
     ToolStartData,
     UsageData,
 )
@@ -118,7 +119,7 @@ def sse_interrupt(id: str, message: str) -> str:
 
 
 def sse_tool_progress(id: str, message: str) -> str:
-    return format_sse("tool_progress", {"type": "tool_progress", "id": id, "message": message})
+    return format_sse("tool_progress", ToolProgressData(id=id, message=message))
 
 
 async def heartbeat(queue: asyncio.Queue[str | None], interval_secs: int = 15) -> None:

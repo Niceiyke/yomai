@@ -29,6 +29,21 @@ class JobEventStore(Protocol):
     ) -> AsyncIterator[StoredEvent | None]: ...
 
 
+def _parse_event_id(raw: int | str | None) -> int:
+    if raw is None:
+        return 0
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return int(str(raw).split("-", 1)[0])
+    except (ValueError, IndexError):
+        return 0
+
+
 class InMemoryJobEventStore:
     """Append-only job event store for tests and inline/dev queue mode.
 
@@ -51,10 +66,7 @@ class InMemoryJobEventStore:
             return next_id
 
     async def read_after(self, job_id: str, event_id: int | str | None) -> list[StoredEvent]:
-        try:
-            after = int(event_id or 0)
-        except (ValueError, TypeError):
-            after = 0
+        after = _parse_event_id(event_id)
         return [event for event in self._events.get(job_id, []) if int(event.id) > after]
 
     async def subscribe(
@@ -64,10 +76,7 @@ class InMemoryJobEventStore:
         *,
         heartbeat_secs: float = 15.0,
     ) -> AsyncIterator[StoredEvent | None]:
-        try:
-            last_id = int(after_id or 0)
-        except (ValueError, TypeError):
-            last_id = 0
+        last_id = _parse_event_id(after_id)
         while True:
             pending = await self.read_after(job_id, last_id)
             if pending:

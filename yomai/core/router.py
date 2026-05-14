@@ -298,8 +298,10 @@ class AgentRoute(BaseRoute):
         async def generate() -> AsyncIterator[str]:
             agent_task = asyncio.create_task(run_agent())
             _stream_tasks = getattr(self, '_stream_tasks', None)
-            if _stream_tasks is not None:
-                _stream_tasks[session_id] = agent_task
+            _stream_tasks_lock = getattr(self, '_stream_tasks_lock', None)
+            if _stream_tasks is not None and _stream_tasks_lock is not None:
+                async with _stream_tasks_lock:
+                    _stream_tasks[session_id] = agent_task
             heartbeat_task = asyncio.create_task(heartbeat(queue, self.heartbeat_secs))
             started_at = time.monotonic()
             seq = 0
@@ -311,7 +313,8 @@ class AgentRoute(BaseRoute):
             try:
                 while True:
                     if time.monotonic() - started_at > self.agent_config.timeout_secs:
-                        agent_task.cancel()
+                        if not agent_task.done():
+                            agent_task.cancel()
                         timeout_sse = sse_error("Agent request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
@@ -330,8 +333,9 @@ class AgentRoute(BaseRoute):
                     seq += 1
                     yield f"id: {seq}\n{item}"
             finally:
-                if _stream_tasks is not None:
-                    _stream_tasks.pop(session_id, None)
+                if _stream_tasks is not None and _stream_tasks_lock is not None:
+                    async with _stream_tasks_lock:
+                        _stream_tasks.pop(session_id, None)
                 heartbeat_task.cancel()
                 if not agent_task.done():
                     agent_task.cancel()
@@ -347,13 +351,23 @@ class AgentRoute(BaseRoute):
     def _extract_json(self, text: str, model: type[BaseModel]) -> BaseModel:
         """Try to extract a JSON object from LLM output and validate against the model.
 
-        Searches from the end of the text backwards, since LLMs typically place
-        the final structured response after explanatory preamble. Falls back to
-        searching from the start if no valid object is found at the end.
+        Strategy (in order):
+        1. Extract from ```json fences first (most common LLM format).
+        2. Scan backward from each '{' for the rightmost full JSON object.
+        3. Parse entire text as JSON.
         """
         import json as json_lib
         decoder = json_lib.JSONDecoder()
-        # Prefer the rightmost JSON object (LLMs put final response last)
+
+        fence_pattern = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
+        for match in fence_pattern.finditer(text):
+            try:
+                block = match.group(1).strip()
+                obj, _end = decoder.raw_decode(block)
+                return model.model_validate(obj)
+            except (json_lib.JSONDecodeError, ValidationError, ValueError):
+                continue
+
         positions = [m.start() for m in re.finditer(r"\{", text)]
         for pos in reversed(positions):
             try:
@@ -361,7 +375,6 @@ class AgentRoute(BaseRoute):
                 return model.model_validate(obj)
             except (json_lib.JSONDecodeError, ValidationError):
                 continue
-        # Last resort: try parsing the entire text as JSON
         return model.model_validate(json_lib.loads(text))
 
     def _build_kwargs(
@@ -464,8 +477,10 @@ class WorkflowRoute(BaseRoute):
         async def generate() -> AsyncIterator[str]:
             task = asyncio.create_task(run_workflow())
             _stream_tasks = getattr(self, '_stream_tasks', None)
-            if _stream_tasks is not None:
-                _stream_tasks[session_id] = task
+            _stream_tasks_lock = getattr(self, '_stream_tasks_lock', None)
+            if _stream_tasks is not None and _stream_tasks_lock is not None:
+                async with _stream_tasks_lock:
+                    _stream_tasks[session_id] = task
             heartbeat_task = asyncio.create_task(heartbeat(queue, self.app.config.streaming.heartbeat_secs))
             started_at = time.monotonic()
             seq = 0
@@ -477,7 +492,8 @@ class WorkflowRoute(BaseRoute):
             try:
                 while True:
                     if time.monotonic() - started_at > self.app.config.streaming.max_duration_secs:
-                        task.cancel()
+                        if not task.done():
+                            task.cancel()
                         timeout_sse = sse_error("Workflow request timed out", "timeout")
                         if stream_log is not None:
                             stream_log.observe_sse(timeout_sse)
@@ -496,8 +512,9 @@ class WorkflowRoute(BaseRoute):
                     seq += 1
                     yield f"id: {seq}\n{item}"
             finally:
-                if _stream_tasks is not None:
-                    _stream_tasks.pop(session_id, None)
+                if _stream_tasks is not None and _stream_tasks_lock is not None:
+                    async with _stream_tasks_lock:
+                        _stream_tasks.pop(session_id, None)
                 heartbeat_task.cancel()
                 if not task.done():
                     task.cancel()

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any
+from typing import Any, Optional, Union
 
 import pytest
 
@@ -15,9 +15,7 @@ from yomai.config import (
     StreamingConfig,
 )
 from yomai.testing import YomaiTestClient, mock_llm
-from yomai.testing.mock_llm import MockToolCall
 from yomai.workflow.runner import WorkflowRunner
-
 
 # ===========================================================================
 # #1 — Budget daily reset
@@ -26,8 +24,7 @@ from yomai.workflow.runner import WorkflowRunner
 @pytest.mark.asyncio
 async def test_budget_daily_reset() -> None:
     """Daily budget counters reset at midnight."""
-    from yomai import Yomai
-    from yomai.budget import BudgetTracker, BudgetState
+    from yomai.budget import BudgetTracker
 
     tracker = BudgetTracker(BudgetConfig(max_cost_per_day=1.0, on_exceeded="stop"))
 
@@ -50,7 +47,6 @@ async def test_budget_daily_reset() -> None:
 @pytest.mark.asyncio
 async def test_budget_daily_reset_on_new_day() -> None:
     """Budget auto-resets when check() is called on a new day."""
-    from yomai import Yomai
     from yomai.budget import BudgetTracker
 
     tracker = BudgetTracker(BudgetConfig(max_cost_per_day=1.0, on_exceeded="stop"))
@@ -180,8 +176,8 @@ async def test_tool_cache_concurrent_access_does_not_corrupt() -> None:
     """Two concurrent AgentLoops hitting the same cached tool do not corrupt cache."""
     from yomai import Yomai, tool
     from yomai.core.agent import AgentLoop
-    from yomai.llm.openai import OpenAIProvider
     from yomai.llm.anthropic import AnthropicProvider
+    from yomai.llm.openai import OpenAIProvider
 
     call_count = 0
 
@@ -196,8 +192,8 @@ async def test_tool_cache_concurrent_access_does_not_corrupt() -> None:
         memory=MemoryConfig(backend="dict", db_path="/unused"),
     )
 
-    original_openai = getattr(OpenAIProvider, "stream")
-    original_anthropic = getattr(AnthropicProvider, "stream")
+    original_openai = OpenAIProvider.stream
+    original_anthropic = AnthropicProvider.stream
 
     stream_factory = lambda self, messages, tools, system: _ConcurrentToolStream("expensive_op", {"x": 1})  # type: ignore[assignment, arg-type, misc, return-value]
     OpenAIProvider.stream = stream_factory  # type: ignore[method-assign]
@@ -247,7 +243,6 @@ async def test_parallel_fail_fast_false_collects_errors() -> None:
 
     @app.workflow("/robust")
     async def robust(runner: WorkflowRunner):
-        import asyncio as _asyncio
 
         async def ok_tool() -> str:
             return str(await runner.tool(succeed))
@@ -403,3 +398,231 @@ async def test_rate_limiter_cleans_up_empty_request_buckets() -> None:
     # After evicting stale entries and adding a new one, the bucket should
     # contain exactly the new entry (and the key still exists)
     assert len(limiter._requests.get("user-1", [])) == 1
+
+
+# ===========================================================================
+# #30 — HITL interrupt already-resolved before wait (deadlock fix)
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_interrupt_already_resolved_does_not_deadlock() -> None:
+    """If an interrupt is already resolved, get() returns resolved status without waiting."""
+    from yomai.jobs.interrupts import InMemoryInterruptStore, Interrupt
+
+    store = InMemoryInterruptStore()
+    intr = Interrupt(id="abc123", job_id="j1", message="please approve")
+    await store.create(intr)
+
+    await store.resolve("abc123", "approved", action="approve")
+
+    resolved = await store.get("abc123")
+    assert resolved is not None
+    assert resolved.status == "resolved"
+    assert resolved.response == "approved"
+
+
+@pytest.mark.asyncio
+async def test_interrupt_resolve_before_wait_returns_immediately() -> None:
+    """WorkflowRunner._wait_for_interrupt checks for pre-resolved interrupt before waiting."""
+    from yomai.jobs.interrupts import InMemoryInterruptStore, Interrupt
+
+    store = InMemoryInterruptStore()
+    intr = Interrupt(id="def456", job_id="j2", message="review")
+    await store.create(intr)
+
+    await store.resolve("def456", "ok", action="approve")
+
+    resolved_check = await store.get("def456")
+    assert resolved_check is not None
+    assert resolved_check.status == "resolved"
+
+
+# ===========================================================================
+# #31 — Budget treats stop vs warn correctly with on_exceeded
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_budget_warn_mode_does_not_block() -> None:
+    """When on_exceeded='warn', budget checks log but never set exceeded=True."""
+    from yomai.budget import BudgetTracker
+    from yomai.config import BudgetConfig
+
+    tracker = BudgetTracker(BudgetConfig(max_cost_per_day=0.01, on_exceeded="warn"))
+
+    result = await tracker.check("s1", tokens_in=1000, tokens_out=500, cost_estimate=0.5)
+    assert not result["exceeded"]
+
+
+# ===========================================================================
+# #32 — _extract_json handles code fences (markdown ```json)
+# ===========================================================================
+
+
+def test_extract_json_from_markdown_fence() -> None:
+    """_extract_json extracts JSON from ```json ``` code blocks."""
+    from pydantic import BaseModel
+
+    from yomai.core.router import AgentRoute
+
+    class Result(BaseModel):
+        answer: str
+        confidence: float
+
+    route = AgentRoute.__new__(AgentRoute)
+    text = 'Here is my analysis:\n\n```json\n{"answer": "yes", "confidence": 0.95}\n```\n\nHope that helps!'
+    result = route._extract_json(text, Result)
+    assert result.answer == "yes"
+    assert result.confidence == 0.95
+
+
+def test_extract_json_from_plain_fence() -> None:
+    """_extract_json handles ``` without language tag."""
+    from pydantic import BaseModel
+
+    from yomai.core.router import AgentRoute
+
+    class Result(BaseModel):
+        value: int
+
+    route = AgentRoute.__new__(AgentRoute)
+    text = '```\n{"value": 42}\n```'
+    result = route._extract_json(text, Result)
+    assert result.value == 42
+
+
+def test_extract_json_returns_raw_when_no_fence() -> None:
+    """_extract_json falls back to scanning for JSON when no fences present."""
+    from pydantic import BaseModel
+
+    from yomai.core.router import AgentRoute
+
+    class Result(BaseModel):
+        x: int
+
+    route = AgentRoute.__new__(AgentRoute)
+    text = 'preable text {"x": 7} trailing'
+    result = route._extract_json(text, Result)
+    assert result.x == 7
+
+
+# ===========================================================================
+# #33 — DictMemory eviction sampling
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_dict_memory_partial_eviction_limits_scan() -> None:
+    """DictMemory._evict_sample only removes EVICT_SAMPLE entries at a time (lazy scan)."""
+    from yomai.memory.dict import DictMemory
+
+    be = DictMemory(ttl_hours=1)
+    be._ttl_secs = 1
+    be._EVICT_SAMPLE = 3
+
+    for i in range(10):
+        await be.save(f"s{i}", f"msg{i}", f"reply{i}")
+
+    await asyncio.sleep(1.1)
+
+    await be.load("s0")
+    count_before = len(be._store)
+    assert count_before < 10
+    assert count_before >= 7  # at most EVICT_SAMPLE=3 removed
+
+
+# ===========================================================================
+# #34 — RedisJobStore atomic create prevents duplicate overwrite
+# ===========================================================================
+
+
+@pytest.mark.asyncio
+async def test_redis_job_store_create_is_idempotent() -> None:
+    """Calling create with same job_id twice returns the original record."""
+    from test_v2_redis_jobs import FakeRedis
+
+    from yomai.jobs.models import JobRecord
+    from yomai.jobs.store import RedisJobStore
+
+    client = FakeRedis()
+    store = RedisJobStore("redis://test", prefix="yomai:test", ttl_secs=60, client=client)
+
+    r1 = JobRecord(id="dup_job", route="/x", stream_url="/s", status_url="/u")
+    created1 = await store.create(r1)
+    assert created1.id == "dup_job"
+    assert created1.route == "/x"
+
+    r2 = JobRecord(id="dup_job", route="/y", stream_url="/s2", status_url="/u2")
+    created2 = await store.create(r2)
+
+    assert created2.route == "/x"
+
+
+# ===========================================================================
+# #35 — _validate_tool_args handles Union/Optional generics correctly
+# ===========================================================================
+
+
+def test_validate_tool_args_union_accepts_any_member() -> None:
+    """Union[str, int] accepts either str or int."""
+    from yomai.core.agent import AgentLoop
+    from typing import Union
+
+    def mytool(x: Union[str, int]) -> str:
+        return str(x)
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._validate_tool_args(mytool, {"x": 42})
+    loop._validate_tool_args(mytool, {"x": "hello"})
+
+
+def test_validate_tool_args_optional_allows_none() -> None:
+    """Optional[int] accepts None."""
+    from yomai.core.agent import AgentLoop
+    from typing import Optional
+
+    def mytool(limit: Optional[int] = 10) -> str:
+        return str(limit)
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._validate_tool_args(mytool, {"limit": None})
+    loop._validate_tool_args(mytool, {"limit": 5})
+
+
+def test_optional_int_rejects_string() -> None:
+    """Optional[int] rejects str value."""
+    from yomai.core.agent import AgentLoop
+    from typing import Optional
+
+    def myfn(limit: Optional[int] = 10) -> str:
+        return str(limit)
+
+    loop = AgentLoop.__new__(AgentLoop)
+    with pytest.raises(TypeError, match="must be one of"):
+        loop._validate_tool_args(myfn, {"limit": "abc"})
+
+
+def test_validate_tool_args_handles_annotated() -> None:
+    """Annotated[str, Field(...)] accepts str."""
+    from yomai.core.agent import AgentLoop
+    from typing import Annotated
+
+    def mytool(query: Annotated[str, "some metadata"]) -> str:
+        return query
+
+    loop = AgentLoop.__new__(AgentLoop)
+    loop._validate_tool_args(mytool, {"query": "test"})
+
+
+def test_validate_tool_args_union_rejects_wrong_type() -> None:
+    """Union[str, int] rejects list."""
+    from yomai.core.agent import AgentLoop
+    from typing import Union
+
+    def mytool(x: Union[str, int]) -> str:
+        return str(x)
+
+    loop = AgentLoop.__new__(AgentLoop)
+    with pytest.raises(TypeError, match="must be one of"):
+        loop._validate_tool_args(mytool, {"x": [1, 2, 3]})

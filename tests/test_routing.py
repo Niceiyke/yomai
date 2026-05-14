@@ -612,7 +612,7 @@ def test_validate_tool_args_optional_int() -> None:
     loop._validate_tool_args(set_count, {"count": 0})
 
     # Invalid: string where int is expected
-    with pytest.raises(TypeError, match="must be int"):
+    with pytest.raises(TypeError, match="must be one of"):
         loop._validate_tool_args(set_count, {"count": "not_an_int"})
 
 

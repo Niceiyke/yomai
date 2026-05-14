@@ -88,10 +88,25 @@ class RedisJobStore:
         return f"{self.prefix}:jobs:index"
 
     async def create(self, record: JobRecord) -> JobRecord:
-        await self._write(record)
-        await self.client.sadd(self._index_key(), record.id)
-        if self.ttl_secs > 0:
-            await self.client.expire(self._index_key(), self.ttl_secs)
+        key = self._key(record.id)
+        idx_key = self._index_key()
+        for _retry in range(3):
+            await self.client.watch(key)
+            if await self.client.exists(key):
+                await self.client.unwatch()
+                raw = await self.client.hgetall(key)
+                if raw:
+                    return _record_from_redis(raw)
+                continue
+            tr = self.client.multi()
+            tr.hset(key, mapping=_record_to_redis(record))
+            tr.sadd(idx_key, record.id)
+            if self.ttl_secs > 0:
+                tr.expire(key, self.ttl_secs)
+                tr.expire(idx_key, self.ttl_secs)
+            exec_result = await tr.execute()
+            if exec_result is not None:
+                return record
         return record
 
     async def get(self, job_id: str) -> JobRecord | None:
@@ -108,12 +123,24 @@ class RedisJobStore:
         result: object = None,
         error: str | None = None,
     ) -> JobRecord | None:
-        current = await self.get(job_id)
-        if current is None:
-            return None
-        updated = _updated_record(current, status, result=result, error=error)
-        await self._write(updated)
-        return updated
+        key = self._key(job_id)
+        for _retry in range(3):
+            await self.client.watch(key)
+            raw = await self.client.hgetall(key)
+            if not raw:
+                await self.client.unwatch()
+                return None
+            current = _record_from_redis(raw)
+            updated = _updated_record(current, status, result=result, error=error)
+            data = _record_to_redis(updated)
+            tr = self.client.multi()
+            tr.hset(key, mapping=data)
+            if self.ttl_secs > 0:
+                tr.expire(key, self.ttl_secs)
+            exec_result = await tr.execute()
+            if exec_result is not None:
+                return updated
+        return None
 
     async def list(self) -> Iterable[JobRecord]:
         ids = await self.client.smembers(self._index_key())

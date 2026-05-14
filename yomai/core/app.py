@@ -12,7 +12,7 @@ import signal
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -37,8 +37,8 @@ from yomai.config import (
     RateLimitConfig,
     StreamingConfig,
 )
+from yomai.core._base_route import resolve_dependency
 from yomai.core.router import AgentRoute, WorkflowRoute
-from yomai.core._base_route import AcceptCallback, BaseRoute, LifecycleCallback, resolve_dependency
 from yomai.devui.playground import get_playground_html
 from yomai.exceptions import YomaiConfigError, YomaiRouteError
 from yomai.hooks import HookHandler, HookRegistry
@@ -316,6 +316,7 @@ class Yomai:
         self._metrics_counters: Counter[str] = Counter()
         self._metrics_lock = asyncio.Lock()
         self._active_lock = asyncio.Lock()
+        self._stream_tasks_lock = asyncio.Lock()
         self._queue_backend: SwiftQQueueBackend | None = None  # type: ignore[valid-type]
         self._workflow_handlers: dict[str, Callable[..., Any]] = {}
         self._active_connections = 0
@@ -526,7 +527,8 @@ class Yomai:
 
     async def _stream_cancel(self, request: Request) -> JSONResponse:
         session_id = request.path_params["session_id"]
-        task = self._stream_tasks.pop(session_id, None)
+        async with self._stream_tasks_lock:
+            task = self._stream_tasks.pop(session_id, None)
         if task is not None and not task.done():
             task.cancel()
             return JSONResponse({"status": "cancelled", "session_id": session_id})
@@ -692,10 +694,14 @@ class Yomai:
                 await self._append_job_sse(job_id, item)
 
         consumer = asyncio.create_task(consume_events())
+        consumer.add_done_callback(self._on_consumer_done)
+        slot_held = True
         try:
             for attempt in range(max_retries + 1):
                 if attempt > 0:
-                    await self.rate_limiter.release_concurrent(session_id)
+                    if slot_held:
+                        await self.rate_limiter.release_concurrent(session_id)
+                        slot_held = False
                     delay = self.config.queue.retry_delay_secs or 1.0
                     multiplier = 2.0
                     await asyncio.sleep(delay * (multiplier ** (attempt - 1)))
@@ -705,6 +711,7 @@ class Yomai:
                     )
                     if not acquired:
                         raise RuntimeError("Lost rate limit slot during retry")
+                    slot_held = True
                     await self.jobs.update_status(job_id, "retrying")
                     await self.hooks.emit("workflow.retrying", job_id=job_id, route=path, attempt=attempt)
 
@@ -722,11 +729,16 @@ class Yomai:
                     await self.jobs.update_status(job_id, "succeeded", result=result)
                     await self.hooks.emit("workflow.done", job_id=job_id, route=path, result=result)
                     await self.hooks.emit("job.succeeded", job_id=job_id, route=path, result=result)
-                    await self.rate_limiter.release_concurrent(session_id)
+                    if slot_held:
+                        await self.rate_limiter.release_concurrent(session_id)
+                        slot_held = False
                     break  # Success
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
+                    if slot_held:
+                        await self.rate_limiter.release_concurrent(session_id)
+                        slot_held = False
                     if attempt >= max_retries:
                         message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
                         from yomai.streaming.sse import sse_error
@@ -738,8 +750,9 @@ class Yomai:
                         await self.hooks.emit("workflow.failed", job_id=job_id, route=path, error=message_out)
                         await self.hooks.emit("job.failed", job_id=job_id, route=path, error=message_out)
                         await self.hooks.emit("error", job_id=job_id, route=path, error=message_out)
-                    await self.rate_limiter.release_concurrent(session_id)
         finally:
+            if slot_held:
+                await self.rate_limiter.release_concurrent(session_id)
             with contextlib.suppress(Exception):
                 await queue.put(None)
             try:
@@ -753,6 +766,15 @@ class Yomai:
         from yomai.streaming.sse import sse_done
 
         return sse_done()
+
+    @staticmethod
+    def _on_consumer_done(task: asyncio.Task[Any]) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            import traceback
+            traceback.print_exception(type(exc), exc, exc.__traceback__)
 
     def _metadata_auth_error(self, request: Request) -> JSONResponse | None:
         if env.YOMAI_ENV != "production":
@@ -901,6 +923,7 @@ class Yomai:
             route._hooks = self.hooks
             route._tool_cache = self._tool_cache
             route._stream_tasks = self._stream_tasks
+            route._stream_tasks_lock = self._stream_tasks_lock
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
@@ -1035,7 +1058,7 @@ class Yomai:
                     await self.hooks.emit("job.queued", job_id=job_id, route=path)
                     queue_backend = self._get_queue_backend()
                     if queue_backend is None:
-                        asyncio.create_task(
+                        task = asyncio.create_task(
                             self._run_inline_workflow_job(
                                 job_id=job_id,
                                 path=path,
@@ -1046,6 +1069,7 @@ class Yomai:
                                 max_retries=max_retries,
                             )
                         )
+                        task.add_done_callback(self._on_consumer_done)
                     else:
                         await queue_backend.enqueue_workflow(
                             QueuedWorkflow(
@@ -1108,6 +1132,7 @@ class Yomai:
             )
             route._hooks = self.hooks
             route._stream_tasks = self._stream_tasks
+            route._stream_tasks_lock = self._stream_tasks_lock
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             body_params = self._route_params(fn, injected={"runner", "request"}, path_params=path_params)
@@ -1483,7 +1508,7 @@ class Yomai:
                 {
                     "name": name,
                     "type": type_name,
-                    "required": param.default is inspect.Signature.empty and not is_path,
+                    "required": param.default is inspect.Signature.empty,
                     "default": None if param.default is inspect.Signature.empty else param.default,
                     "in": "path" if is_path else "body",
                 }
@@ -1530,12 +1555,30 @@ class Yomai:
         return not self._draining
 
     def _stream_started(self) -> None:
-        self._active_connections += 1
+        try:
+            task = asyncio.get_running_loop().create_task(self._incr_active())
+            task.add_done_callback(self._on_consumer_done)
+        except RuntimeError:
+            self._active_connections += 1
+
+    async def _incr_active(self) -> None:
+        async with self._active_lock:
+            self._active_connections += 1
 
     def _stream_finished(self) -> None:
-        self._active_connections = max(0, self._active_connections - 1)
-        if self._active_connections <= 0 and self._draining:
-            self._drained.set()
+        try:
+            task = asyncio.get_running_loop().create_task(self._decr_active())
+            task.add_done_callback(self._on_consumer_done)
+        except RuntimeError:
+            self._active_connections = max(0, self._active_connections - 1)
+            if self._active_connections <= 0 and self._draining:
+                self._drained.set()
+
+    async def _decr_active(self) -> None:
+        async with self._active_lock:
+            self._active_connections = max(0, self._active_connections - 1)
+            if self._active_connections <= 0 and self._draining:
+                self._drained.set()
 
     async def _get_active_connections(self) -> int:
         async with self._active_lock:
@@ -1564,17 +1607,20 @@ class Yomai:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        loop.create_task(self._drain_active_connections())
+        task = loop.create_task(self._drain_active_connections())
+        task.add_done_callback(self._on_consumer_done)
 
     async def _drain_active_connections(self) -> None:
         timeout = self.config.streaming.shutdown_timeout_secs
         try:
             await asyncio.wait_for(self._drained.wait(), timeout=timeout)
         except asyncio.TimeoutError:
-            for session_id, task in list(self._stream_tasks.items()):
+            async with self._stream_tasks_lock:
+                tasks = list(self._stream_tasks.items())
+                self._stream_tasks.clear()
+            for _session_id, task in tasks:
                 if not task.done():
                     task.cancel()
-            self._stream_tasks.clear()
 
     def _validate_new_path(self, path: str, method: str | None = None) -> None:
         """Validate that a route path+method is available.
@@ -1592,7 +1638,7 @@ class Yomai:
         self._starlette.add_middleware(middleware_class, **kwargs)
 
     async def close(self) -> None:
-        if isinstance(self.memory, RedisMemory):
+        if isinstance(self.memory, (RedisMemory, SqliteMemory)):
             await self.memory.close()
 
         if isinstance(self.jobs, RedisJobStore):

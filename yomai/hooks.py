@@ -75,6 +75,8 @@ class HookRegistry:
         results = await asyncio.gather(*(_run(h, _handler_name(h)) for h in handlers), return_exceptions=False)
         failures = [r for r in results if r is not None]
         self._failures.extend(failures)
+        if len(self._failures) > 1000:
+            self._failures = self._failures[-500:]
         return failures
 
     def emit_background(self, name: str, **payload: Any) -> None:

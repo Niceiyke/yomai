@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import sqlite3
-from typing import Any
 
 from yomai.llm.base import Message
 from yomai.memory.base import MemoryBackend
@@ -17,7 +17,17 @@ class SqliteMemory(MemoryBackend):
         self._max = max_messages
         self._ttl_secs = max(0, ttl_hours) * 3600
         self._lock = asyncio.Lock()
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="yomai-sqlite")
+        self._conn: sqlite3.Connection | None = None
         self._init_db()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            conn = sqlite3.connect(self._db_path, timeout=30)
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.row_factory = sqlite3.Row
+            self._conn = conn
+        return self._conn
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._db_path, timeout=30)
@@ -25,7 +35,7 @@ class SqliteMemory(MemoryBackend):
         return conn
 
     def _init_db(self) -> None:
-        conn = self._connect()
+        conn = sqlite3.connect(self._db_path, timeout=30)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS sessions ("
@@ -59,6 +69,13 @@ class SqliteMemory(MemoryBackend):
         async with self._lock:
             await self._clear_sync(session_id)
 
+    async def close(self) -> None:
+        async with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+            self._executor.shutdown(wait=False)
+
     def _truncate(self, history: list[Message]) -> list[Message]:
         if self._max <= 0 or len(history) <= self._max:
             return history
@@ -69,60 +86,47 @@ class SqliteMemory(MemoryBackend):
 
     async def _load_sync(self, session_id: str) -> list[Message]:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._do_load, session_id)
+        return await loop.run_in_executor(self._executor, self._do_load, session_id)
 
     def _do_load(self, session_id: str) -> list[Message]:
-        conn = self._connect()
+        conn = self._get_conn()
+        cur = conn.execute("SELECT history_json FROM sessions WHERE session_id = ?", (session_id,))
+        row = cur.fetchone()
+        if row is None:
+            return []
         try:
-            conn.row_factory = sqlite3.Row
-            cur = conn.execute("SELECT history_json FROM sessions WHERE session_id = ?", (session_id,))
-            row = cur.fetchone()
-            if row is None:
-                return []
-            try:
-                return json.loads(row["history_json"])
-            except (json.JSONDecodeError, KeyError):
-                return []
-        finally:
-            conn.close()
+            return json.loads(row["history_json"])
+        except (json.JSONDecodeError, KeyError):
+            return []
 
     async def _save_sync(self, session_id: str, history: list[Message]) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._do_save, session_id, json.dumps(history))
+        await loop.run_in_executor(self._executor, self._do_save, session_id, json.dumps(history))
 
     def _do_save(self, session_id: str, history_json: str) -> None:
-        conn = self._connect()
-        try:
-            conn.execute(
-                "INSERT OR REPLACE INTO sessions (session_id, history_json, updated_at) VALUES (?, ?, strftime('%s','now'))",
-                (session_id, history_json),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT OR REPLACE INTO sessions (session_id, history_json, updated_at) VALUES (?, ?, strftime('%s','now'))",
+            (session_id, history_json),
+        )
+        conn.commit()
 
     async def _clear_sync(self, session_id: str) -> None:
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._do_clear, session_id)
+        await loop.run_in_executor(self._executor, self._do_clear, session_id)
 
     def _do_clear(self, session_id: str) -> None:
-        conn = self._connect()
-        try:
-            conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+        conn.commit()
 
     async def _delete_expired_sync(self) -> None:
         if self._ttl_secs <= 0:
             return
         loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, self._do_delete_expired)
+        await loop.run_in_executor(self._executor, self._do_delete_expired)
 
     def _do_delete_expired(self) -> None:
-        conn = self._connect()
-        try:
-            conn.execute("DELETE FROM sessions WHERE updated_at < strftime('%s','now') - ?", (self._ttl_secs,))
-            conn.commit()
-        finally:
-            conn.close()
+        conn = self._get_conn()
+        conn.execute("DELETE FROM sessions WHERE updated_at < strftime('%s','now') - ?", (self._ttl_secs,))
+        conn.commit()

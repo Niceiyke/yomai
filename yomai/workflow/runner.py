@@ -20,7 +20,6 @@ from yomai.streaming.sse import (
     sse_interrupt,
     sse_tool_progress,
 )
-from yomai.tools.cache import ToolCache
 from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_step_done, sse_step_start
 
@@ -53,6 +52,7 @@ class WorkflowRunner:
         self.job_id = job_id
         self._step_index = 0
         self._prev_graph_node: str | None = None
+        self._graph_lock = asyncio.Lock()
         self.state: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
@@ -335,10 +335,11 @@ class WorkflowRunner:
     # ------------------------------------------------------------------
 
     async def _emit_graph_node(self, node_id: str, label: str, kind: str) -> None:
-        await self.sse_queue.put(sse_graph_upsert(node_id, label[:80], kind, "running"))
-        if self._prev_graph_node:
-            await self.sse_queue.put(sse_graph_edge(self._prev_graph_node, node_id, "next"))
-        self._prev_graph_node = node_id
+        async with self._graph_lock:
+            await self.sse_queue.put(sse_graph_upsert(node_id, label[:80], kind, "running"))
+            if self._prev_graph_node:
+                await self.sse_queue.put(sse_graph_edge(self._prev_graph_node, node_id, "next"))
+            self._prev_graph_node = node_id
 
     async def _emit_checkpoint(self, name: str, result_preview: str) -> None:
         ckpt_id = f"checkpoint_{name}"
@@ -430,6 +431,9 @@ class WorkflowRunner:
                 await asyncio.sleep(0.2)
             raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out")
         else:
+            resolved = await self.app._interrupt_store.get(interrupt_id)
+            if resolved and resolved.status == "resolved":
+                return
             event = self.app._interrupt_store.event(interrupt_id)
             if timeout_secs:
                 await asyncio.wait_for(event.wait(), timeout=timeout_secs)

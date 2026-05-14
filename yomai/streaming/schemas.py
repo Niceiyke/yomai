@@ -87,6 +87,12 @@ class InterruptData(BaseModel):
     message: str
 
 
+class ToolProgressData(BaseModel):
+    type: Literal["tool_progress"] = "tool_progress"
+    id: str
+    message: str
+
+
 # ---------------------------------------------------------------------------
 # Graph events (action-discriminated, event: graph)
 # ---------------------------------------------------------------------------
@@ -136,6 +142,7 @@ SSEEventData = (
     | ResultData
     | PingData
     | InterruptData
+    | ToolProgressData
     | GraphUpsertData
     | GraphEdgeData
     | GraphUpdateData

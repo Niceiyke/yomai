@@ -152,7 +152,16 @@ class RedisInterruptStore:
         key = self._key(interrupt.id)
         data = json.dumps({"id": interrupt.id, "job_id": interrupt.job_id, "message": interrupt.message,
                            "status": "pending", "created_at": interrupt.created_at.isoformat()})
-        await self.client.set(key, data, ex=self.ttl_secs)
+        for _retry in range(3):
+            await self.client.watch(key)
+            if await self.client.exists(key):
+                await self.client.unwatch()
+                return
+            tr = self.client.multi()
+            tr.set(key, data, ex=self.ttl_secs)
+            exec_result = await tr.execute()
+            if exec_result is not None:
+                return
 
     async def get(self, interrupt_id: str) -> Interrupt | None:
         raw = await self.client.get(self._key(interrupt_id))
@@ -170,18 +179,34 @@ class RedisInterruptStore:
     async def resolve(self, interrupt_id: str, response: str, *, action: str | None = None,
                       comment: str = "", resolved_by: str = "") -> bool:
         key = self._key(interrupt_id)
-        current = await self.get(interrupt_id)
-        if current is None or current.status != "pending":
-            return False
-        data = json.dumps({
-            "id": interrupt_id, "job_id": current.job_id, "message": current.message,
-            "status": "resolved", "response": response, "action": action,
-            "comment": comment, "resolved_by": resolved_by,
-            "created_at": current.created_at.isoformat(),
-            "resolved_at": datetime.now(timezone.utc).isoformat(),
-        })
-        await self.client.set(key, data, ex=self.ttl_secs)
-        return True
+        for _retry in range(3):
+            await self.client.watch(key)
+            raw = await self.client.get(key)
+            if not raw:
+                await self.client.unwatch()
+                return False
+            try:
+                current_data = json.loads(raw)
+            except json.JSONDecodeError:
+                await self.client.unwatch()
+                return False
+            if current_data.get("status") != "pending":
+                await self.client.unwatch()
+                return False
+            new_data = json.dumps({
+                "id": interrupt_id, "job_id": current_data.get("job_id", ""),
+                "message": current_data.get("message", ""),
+                "status": "resolved", "response": response, "action": action,
+                "comment": comment, "resolved_by": resolved_by,
+                "created_at": current_data.get("created_at", datetime.now(timezone.utc).isoformat()),
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
+            })
+            tr = self.client.multi()
+            tr.set(key, new_data, ex=self.ttl_secs)
+            exec_result = await tr.execute()
+            if exec_result is not None:
+                return True
+        return False
 
     async def delete(self, interrupt_id: str) -> None:
         await self.client.delete(self._key(interrupt_id))
