@@ -696,7 +696,9 @@ class Yomai:
             for attempt in range(max_retries + 1):
                 if attempt > 0:
                     await self.rate_limiter.release_concurrent(session_id)
-                    await asyncio.sleep(1.0 * (2 ** (attempt - 1)))
+                    delay = self.config.queue.retry_delay_secs or 1.0
+                    multiplier = 2.0
+                    await asyncio.sleep(delay * (multiplier ** (attempt - 1)))
                     acquired = await self.rate_limiter.acquire_concurrent(
                         session_id,
                         self.config.rate_limits.max_concurrent_per_session,

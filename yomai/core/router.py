@@ -345,15 +345,23 @@ class AgentRoute(BaseRoute):
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
     def _extract_json(self, text: str, model: type[BaseModel]) -> BaseModel:
-        """Try to extract a JSON object from LLM output and validate against the model."""
+        """Try to extract a JSON object from LLM output and validate against the model.
+
+        Searches from the end of the text backwards, since LLMs typically place
+        the final structured response after explanatory preamble. Falls back to
+        searching from the start if no valid object is found at the end.
+        """
         import json as json_lib
         decoder = json_lib.JSONDecoder()
-        for match in re.finditer(r"\{", text):
+        # Prefer the rightmost JSON object (LLMs put final response last)
+        positions = [m.start() for m in re.finditer(r"\{", text)]
+        for pos in reversed(positions):
             try:
-                obj, _end = decoder.raw_decode(text[match.start():])
+                obj, _end = decoder.raw_decode(text[pos:])
                 return model.model_validate(obj)
             except (json_lib.JSONDecodeError, ValidationError):
                 continue
+        # Last resort: try parsing the entire text as JSON
         return model.model_validate(json_lib.loads(text))
 
     def _build_kwargs(

@@ -260,7 +260,7 @@ class WorkflowRunner:
                     chunks.append(chunk_str)
                     await self.sse_queue.put(sse_tool_progress(tool_id, chunk_str))
                 result = chunks[-1] if chunks else ""
-            elif asyncio.iscoroutinefunction(fn):
+            elif inspect.iscoroutinefunction(fn):
                 result = await fn(**kwargs)
             else:
                 result = await asyncio.to_thread(fn, **kwargs)

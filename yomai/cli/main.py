@@ -232,6 +232,46 @@ def serve(
 
 
 @app.command()
+def dev(
+    app_path: str = "main:app",
+    host: str = "127.0.0.1",
+    port: int = 8000,
+) -> None:
+    """Run with reload and playground enabled (alias for 'yomai run --reload')."""
+    import sys
+    sys.path.insert(0, os.getcwd())
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
+    host = os.environ.get("HOST", host)
+    port = int(os.environ.get("PORT", port))
+
+    module_name, _, attr = app_path.partition(":")
+    if not module_name or not attr:
+        module_name, attr = app_path, "app"
+
+    module = importlib.import_module(module_name)
+    yomai_app: Any = getattr(module, attr)
+    routes = getattr(yomai_app, "_routes_meta", [])
+
+    typer.echo(f"\n  Yomai v{_yomai_version}  ·  http://localhost:{port}")
+    typer.echo(f"  Playground  →  http://localhost:{port}/__yomai__")
+    typer.echo("\n  Routes")
+    for route in routes:
+        tools = ", ".join(route.get("tools", []))
+        route_type = "AgentRoute" if route.get("type") == "agent" else "WorkflowRoute"
+        typer.echo(f"    POST  {route.get('path')}     {route_type}   tools: [{tools}]")
+    typer.echo("")
+
+    import uvicorn
+    uvicorn.run(f"{module_name}:{attr}", host=host, port=port, reload=True, log_level="info")
+
+
+@app.command()
 def deploy(
     app_path: str = "main:app",
     output: str = "Dockerfile",
