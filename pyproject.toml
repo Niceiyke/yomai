@@ -100,6 +100,8 @@ select = [
 ignore = [
   "E501",  # line too long (handled by formatter)
   "B008",  # do not perform function calls in argument defaults
+  "B009",  # getattr with constant key — framework attaches metadata to functions
+  "B010",  # setattr with constant key — framework attaches metadata to functions
   "SIM108", # use ternary operator (sometimes less readable)
 ]
 
