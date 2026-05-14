@@ -118,10 +118,6 @@ async def test_agent_timeout_fires_with_slow_llm() -> None:
         agent=AgentConfig(timeout_secs=1),
     )
 
-    @app.agent("/chat")
-    async def chat(message: str, session_id: str) -> None:
-        pass
-
     class Hanging:
         def __aiter__(self):
             return self
@@ -141,10 +137,12 @@ async def test_agent_timeout_fires_with_slow_llm() -> None:
         provider.stream = lambda messages, tools, system: Hanging()  # type: ignore[method-assign]
         return provider
 
-    # Patch the route's provider_factory (which was captured at registration time)
-    for route in app._starlette.router.routes:
-        if hasattr(route, "provider_factory"):
-            route.provider_factory = slow_factory  # type: ignore[attr-defined]
+    # Patch BEFORE registering agents (route captures factory at decoration time)
+    app._build_provider = slow_factory  # type: ignore[method-assign]
+
+    @app.agent("/chat")
+    async def chat(message: str, session_id: str) -> None:
+        pass
 
     events = await YomaiTestClient(app).get_events("/chat", "hello", session_id="t1")
 
