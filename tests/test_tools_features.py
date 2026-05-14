@@ -28,7 +28,8 @@ async def test_tool_cache_returns_cached_result() -> None:
         return x * 2
 
     @app.agent("/cached", tools=[expensive])
-    async def cached(message: str) -> None: pass
+    async def cached(message: str) -> None:
+        pass
 
     tc1 = MockToolCall("expensive", {"x": 5})
     tc2 = MockToolCall("expensive", {"x": 5})  # same args
@@ -53,7 +54,8 @@ async def test_tool_cache_honors_ttl() -> None:
         return x + 1
 
     @app.agent("/ttl-cached", tools=[short_lived])
-    async def ttl_cached(message: str) -> None: pass
+    async def ttl_cached(message: str) -> None:
+        pass
 
     tc = MockToolCall("short_lived", {"x": 1})
     with mock_llm([[tc, tc], ["done"]]):
@@ -89,6 +91,7 @@ async def test_runner_tool_uses_cache() -> None:
 # -------------------------------------------------------------------
 # Streaming tool results (async generator tools)
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_async_generator_tool_streams_progress() -> None:
@@ -138,12 +141,14 @@ async def test_async_generator_tool_empty_returns_empty_string() -> None:
 # Multi-modal support
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_agent_accepts_string_message() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/chat")
-    async def chat(message: str) -> None: pass
+    async def chat(message: str) -> None:
+        pass
 
     with mock_llm(["hello"]):
         result = await YomaiTestClient(app).call("/chat", "hi there", session_id="mm1")
@@ -159,7 +164,8 @@ async def test_agent_accepts_multimodal_content_array() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/vision")
-    async def vision(message: Any) -> None: pass
+    async def vision(message: Any) -> None:
+        pass
 
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -182,7 +188,8 @@ async def test_agent_rejects_empty_content_array() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/bad")
-    async def bad(message: Any) -> None: pass
+    async def bad(message: Any) -> None:
+        pass
 
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

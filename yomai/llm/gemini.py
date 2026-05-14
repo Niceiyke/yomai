@@ -196,7 +196,9 @@ class GeminiProvider(LLMProvider):
 
             except Exception as exc:
                 err_str = str(exc).lower()
-                if ("429" in err_str or "resource_exhausted" in err_str or _is_transient(exc)) and attempt < max_retries:
+                if (
+                    "429" in err_str or "resource_exhausted" in err_str or _is_transient(exc)
+                ) and attempt < max_retries:
                     last_exc = exc
                     delay = backoff * (multiplier**attempt)
                     await asyncio.sleep(delay)

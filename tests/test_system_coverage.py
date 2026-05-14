@@ -1,5 +1,6 @@
 """Tests for memory backends, hooks, plugins, response extraction, multi-modal,
 tool annotations, streaming disconnect, interrupt timeout, and queue types."""
+
 from __future__ import annotations
 
 import asyncio
@@ -14,6 +15,7 @@ from yomai.config import LLMConfig, MemoryConfig
 # ===========================================================================
 # #1 — Memory backend edge tests
 # ===========================================================================
+
 
 class TestMemoryBackends:
     @pytest.mark.asyncio
@@ -124,6 +126,7 @@ class TestMemoryBackends:
 # #2 — Hooks system tests
 # ===========================================================================
 
+
 class TestHooksSystem:
     @pytest.mark.asyncio
     async def test_emit_runs_all_handlers(self) -> None:
@@ -213,6 +216,7 @@ class TestHooksSystem:
 # #3 — Plugin system tests
 # ===========================================================================
 
+
 class TestPluginSystem:
     def test_load_plugins_empty(self) -> None:
         from yomai.plugins import load_plugins
@@ -238,12 +242,14 @@ class TestPluginSystem:
 
     def test_load_plugins_string_path(self) -> None:
         from yomai.plugins import load_plugins
+
         result = load_plugins(["yomai.plugins:plugin"])
         assert len(result) == 1
         assert callable(result[0])
 
     def test_load_plugins_string_no_colon_defaults_to_setup(self) -> None:
         from yomai.plugins import load_plugins
+
         # This module has a 'plugin' attribute but no 'setup'
         with pytest.raises(AttributeError):
             load_plugins(["yomai.plugins"])
@@ -276,6 +282,7 @@ class TestPluginSystem:
 # ===========================================================================
 # #4 — Response model rightmost-preference extraction
 # ===========================================================================
+
 
 class TestResponseModelExtraction:
     def test_chooses_rightmost_json_object(self) -> None:
@@ -311,6 +318,7 @@ class TestResponseModelExtraction:
 # #5 — Multi-modal messages
 # ===========================================================================
 
+
 class TestMultiModalMessages:
     def test_agent_request_text_only(self) -> None:
         from yomai.core.schemas import AgentRequest
@@ -321,27 +329,33 @@ class TestMultiModalMessages:
     def test_agent_request_image_url_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "text", "text": "Describe this"},
-            {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "text", "text": "Describe this"},
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+            ]
+        )
         assert "Describe this" in req.message_text
 
     def test_agent_request_audio_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "input_audio", "input_audio": {"data": "base64..."}},
-            {"type": "text", "text": "Transcribe"},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "input_audio", "input_audio": {"data": "base64..."}},
+                {"type": "text", "text": "Transcribe"},
+            ]
+        )
         assert req.message_text == "Transcribe"
 
     def test_agent_request_no_text_returns_placeholder(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "image_url", "image_url": {"url": "http://x"}},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "image_url", "image_url": {"url": "http://x"}},
+            ]
+        )
         assert req.message_text == "[multi-modal]"
 
     def test_message_text_helper(self) -> None:
@@ -355,6 +369,7 @@ class TestMultiModalMessages:
 # ===========================================================================
 # #6 — Tool decorator annotation edges
 # ===========================================================================
+
 
 class TestToolAnnotationEdges:
     def test_literal_enum_generation(self) -> None:
@@ -444,6 +459,7 @@ class TestToolAnnotationEdges:
 # #7 — Streaming disconnect
 # ===========================================================================
 
+
 class TestStreamingDisconnect:
     @pytest.mark.asyncio
     async def test_disconnect_mid_stream_cancels_task(self) -> None:
@@ -465,6 +481,7 @@ class TestStreamingDisconnect:
         # in the generate() loop. A full disconnect test would need raw ASGI.
         # Here we verify the generate loop checks is_disconnected.
         from yomai.testing import mock_llm
+
         with mock_llm(["hello"]):
             events = await YomaiTestClient(app).get_events("/chat", "test", session_id="dc")
         assert any(e.get("type") == "done" for e in events)
@@ -473,6 +490,7 @@ class TestStreamingDisconnect:
 # ===========================================================================
 # #8 — Interrupt timeout
 # ===========================================================================
+
 
 class TestInterruptTimeout:
     @pytest.mark.asyncio
@@ -547,6 +565,7 @@ class TestInterruptTimeout:
 # #9 — Queue backend adapter
 # ===========================================================================
 
+
 @pytest.mark.asyncio
 async def test_queue_backend_imports_queued_workflow() -> None:
     from yomai.queue.base import QueuedWorkflow
@@ -566,6 +585,7 @@ async def test_queue_backend_imports_queued_workflow() -> None:
 # ===========================================================================
 # #10 — Additional edge: create_job sets URLs
 # ===========================================================================
+
 
 class TestJobRecordEdge:
     @pytest.mark.asyncio
@@ -598,6 +618,7 @@ class TestJobRecordEdge:
 # #10 (continued) — error middleware catches general exceptions
 # ===========================================================================
 
+
 class TestErrorMiddlewareEdge:
     @pytest.mark.asyncio
     async def test_non_streaming_error_returns_json(self) -> None:
@@ -625,11 +646,14 @@ class TestErrorMiddlewareEdge:
 # Schema type classification edge
 # ===========================================================================
 
+
 class TestSchemaType:
     def test_uuid_returns_string(self) -> None:
         from yomai import Yomai
+
         app = Yomai.__new__(Yomai)
         from uuid import UUID
+
         assert app._schema_type(UUID) == "string"
 
     def test_base_model_returns_object(self) -> None:

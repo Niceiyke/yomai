@@ -1,4 +1,5 @@
 """Tests for LLM provider implementations against mocked SDK streams."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -16,8 +17,10 @@ from yomai.llm.openai import OpenAIProvider
 # Mock Anthropic SDK types
 # ---------------------------------------------------------------------------
 
+
 class _MockAnthropicEvent:
     """Simulates an Anthropic stream event with configurable .type and .attr."""
+
     def __init__(self, etype: str, **attrs: Any) -> None:
         self.type = etype
         for k, v in attrs.items():
@@ -72,6 +75,7 @@ def _make_anthropic_stream(events: list[_MockAnthropicEvent], final: tuple[int, 
 
 class _AsyncCtx:
     """Turns any async iterable into an async context manager."""
+
     def __init__(self, iterable: Any) -> None:
         self._iterable = iterable
 
@@ -85,6 +89,7 @@ class _AsyncCtx:
 # ---------------------------------------------------------------------------
 # Mock OpenAI SDK types
 # ---------------------------------------------------------------------------
+
 
 class _MockOpenAIChunk:
     def __init__(self, choices: list[Any] | None = None, usage: Any = None) -> None:
@@ -127,6 +132,7 @@ class _MockOpenAIUsage:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _provider(cfg: dict[str, Any] | None = None) -> Any:
     """Create a configured provider with defaults suitable for testing."""
     return LLMConfig(api_key="sk-test", max_retries=0, **(cfg or {}))
@@ -162,10 +168,8 @@ class TestAnthropicTextStreaming:
         p = AnthropicProvider(_provider())
         events = [
             _MockAnthropicEvent("content_block_start"),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("text_delta", text="Hello")),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("text_delta", text=" world")),
+            _MockAnthropicEvent("content_block_delta", delta=_MockAnthropicEvent("text_delta", text="Hello")),
+            _MockAnthropicEvent("content_block_delta", delta=_MockAnthropicEvent("text_delta", text=" world")),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (10, 5))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -187,8 +191,7 @@ class TestAnthropicTextStreaming:
         """When get_final_message has no usage, message_delta output_tokens used."""
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("message_delta",
-                usage=_MockAnthropicUsage(0, 7)),
+            _MockAnthropicEvent("message_delta", usage=_MockAnthropicUsage(0, 7)),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (0, 0))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -203,6 +206,7 @@ class TestAnthropicTextStreaming:
         def fake_stream(**kw: Any):
             captured_kwargs.update(kw)
             return _make_anthropic_stream([], (0, 0))
+
         p.client.messages.stream = fake_stream
 
         await _collect(p.stream([], [], "You are helpful"))
@@ -216,6 +220,7 @@ class TestAnthropicTextStreaming:
         def fake_stream(**kw: Any):
             captured.update(kw)
             return _make_anthropic_stream([], (0, 0))
+
         p.client.messages.stream = fake_stream
 
         tools = [{"name": "search", "input_schema": {"type": "object"}}]
@@ -226,10 +231,8 @@ class TestAnthropicTextStreaming:
     async def test_empty_text_delta_not_emitted(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("text_delta", text="")),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("text_delta", text="foo")),
+            _MockAnthropicEvent("content_block_delta", delta=_MockAnthropicEvent("text_delta", text="")),
+            _MockAnthropicEvent("content_block_delta", delta=_MockAnthropicEvent("text_delta", text="foo")),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (0, 2))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -242,15 +245,17 @@ class TestAnthropicToolCalls:
     async def test_parses_tool_call_from_json_accumulation(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_start",
-                content_block=_MockAnthropicEvent("tool_use", id="tc1", name="search",
-                    input={"query": ""})),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json='{"query":')),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json='"cats"')),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json="}")),
+            _MockAnthropicEvent(
+                "content_block_start",
+                content_block=_MockAnthropicEvent("tool_use", id="tc1", name="search", input={"query": ""}),
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json='{"query":')
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json='"cats"')
+            ),
+            _MockAnthropicEvent("content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json="}")),
             _MockAnthropicEvent("content_block_stop"),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (50, 30))
@@ -265,11 +270,13 @@ class TestAnthropicToolCalls:
     async def test_fallback_args_when_json_parse_fails(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_start",
-                content_block=_MockAnthropicEvent("tool_use", id="t1", name="calc",
-                    input={"expression": ""})),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json="not json {{")),
+            _MockAnthropicEvent(
+                "content_block_start",
+                content_block=_MockAnthropicEvent("tool_use", id="t1", name="calc", input={"expression": ""}),
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json="not json {{")
+            ),
             _MockAnthropicEvent("content_block_stop"),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (10, 5))
@@ -281,8 +288,7 @@ class TestAnthropicToolCalls:
     async def test_non_tool_content_block_ignored(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_start",
-                content_block=_MockAnthropicEvent("text", text="hello")),
+            _MockAnthropicEvent("content_block_start", content_block=_MockAnthropicEvent("text", text="hello")),
             _MockAnthropicEvent("content_block_stop"),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (1, 1))
@@ -294,8 +300,9 @@ class TestAnthropicToolCalls:
 class TestAnthropicRetries:
     @pytest.mark.asyncio
     async def test_retries_on_transient_error_and_succeeds(self) -> None:
-        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=2,
-            retry_backoff_secs=0.0, retry_backoff_multiplier=1.0))
+        p = AnthropicProvider(
+            LLMConfig(api_key="sk-test", max_retries=2, retry_backoff_secs=0.0, retry_backoff_multiplier=1.0)
+        )
 
         attempt = 0
 
@@ -305,6 +312,7 @@ class TestAnthropicRetries:
             if attempt < 3:
                 raise ConnectionError("transient")
             return _make_anthropic_stream([], (1, 1))
+
         p.client.messages.stream = fake_stream
 
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -313,8 +321,9 @@ class TestAnthropicRetries:
 
     @pytest.mark.asyncio
     async def test_raises_after_max_retries_exhausted(self) -> None:
-        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=1,
-            retry_backoff_secs=0.0, retry_backoff_multiplier=1.0))
+        p = AnthropicProvider(
+            LLMConfig(api_key="sk-test", max_retries=1, retry_backoff_secs=0.0, retry_backoff_multiplier=1.0)
+        )
         p.client.messages.stream = lambda **kw: (_ for _ in ()).throw(ConnectionError("fail"))
 
         with pytest.raises(YomaiLLMError, match="fail"):
@@ -322,8 +331,7 @@ class TestAnthropicRetries:
 
     @pytest.mark.asyncio
     async def test_rate_limit_error_is_retried(self) -> None:
-        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=1,
-            retry_backoff_secs=0.0))
+        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=1, retry_backoff_secs=0.0))
         p._anthropic.RateLimitError = type("RateLimitError", (Exception,), {})
         p._anthropic.AuthenticationError = type("AuthenticationError", (Exception,), {})
 
@@ -335,6 +343,7 @@ class TestAnthropicRetries:
             if attempt < 2:
                 raise p._anthropic.RateLimitError("rate limited")
             return _make_anthropic_stream([], (0, 0))
+
         p.client.messages.stream = fake_stream
 
         await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -342,20 +351,17 @@ class TestAnthropicRetries:
 
     @pytest.mark.asyncio
     async def test_authentication_error_not_retried(self) -> None:
-        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=2,
-            retry_backoff_secs=0.0))
+        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=2, retry_backoff_secs=0.0))
         p._anthropic.AuthenticationError = type("AuthenticationError", (Exception,), {})
         p._anthropic.RateLimitError = type("RateLimitError", (Exception,), {})
-        p.client.messages.stream = lambda **kw: (_ for _ in ()).throw(
-            p._anthropic.AuthenticationError("bad key"))
+        p.client.messages.stream = lambda **kw: (_ for _ in ()).throw(p._anthropic.AuthenticationError("bad key"))
 
         with pytest.raises(YomaiLLMError, match="bad key"):
             await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
 
     @pytest.mark.asyncio
     async def test_non_transient_error_not_retried(self) -> None:
-        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=3,
-            retry_backoff_secs=0.0))
+        p = AnthropicProvider(LLMConfig(api_key="sk-test", max_retries=3, retry_backoff_secs=0.0))
         p.client.messages.stream = lambda **kw: (_ for _ in ()).throw(ValueError("bad input"))
 
         with pytest.raises(YomaiLLMError, match="bad input"):
@@ -372,8 +378,7 @@ class TestAnthropicSchemaFormatting:
 
     def test_tool_result_messages_anthropic_format(self) -> None:
         p = AnthropicProvider(_provider())
-        msgs = p.tool_result_messages(
-            ToolCall(id="t1", name="search", args={"q": "cats"}), "result text")
+        msgs = p.tool_result_messages(ToolCall(id="t1", name="search", args={"q": "cats"}), "result text")
         assert msgs[0]["role"] == "assistant"
         assert msgs[0]["content"][0]["type"] == "tool_use"
         assert msgs[1]["role"] == "user"
@@ -388,6 +393,7 @@ class TestAnthropicSchemaFormatting:
 
 class _FakeOpenAIStream:
     """Async generator that yields mock OpenAI chunks."""
+
     def __init__(self, chunks: list[_MockOpenAIChunk]) -> None:
         self._chunks = chunks
 
@@ -420,10 +426,8 @@ class TestOpenAITextStreaming:
     async def test_streams_text_chunks(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(content="Hello"))]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(content=" World"))]),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=_MockOpenAIDelta(content="Hello"))]),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=_MockOpenAIDelta(content=" World"))]),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -449,8 +453,7 @@ class TestOpenAITextStreaming:
     async def test_no_delta_skipped(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=None, finish_reason="stop")]),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=None, finish_reason="stop")]),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -463,8 +466,7 @@ class TestOpenAITextStreaming:
         p = OpenAIProvider(_provider())
         chunks = [
             _MockOpenAIChunk(choices=[]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(content="ok"))]),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=_MockOpenAIDelta(content="ok"))]),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -481,6 +483,7 @@ class TestOpenAITextStreaming:
         async def fake_create(**kw: Any):
             captured_kwargs.update(kw)
             return _FakeOpenAIStream([])
+
         p.client.chat.completions.create = fake_create
 
         await _collect(p.stream([{"role": "user", "content": "hi"}], [], "be helpful"))
@@ -492,22 +495,34 @@ class TestOpenAIToolCalls:
     async def test_accumulates_and_yields_tool_calls(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    content=None,
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0, id_="call_1",
-                            function=_MockOpenAIFunction(name="search", arguments='{"q":')),
-                    ]))]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0,
-                            function=_MockOpenAIFunction(arguments='"cats"}')),
-                    ]))]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            content=None,
+                            tool_calls=[
+                                _MockOpenAIToolDelta(
+                                    index=0,
+                                    id_="call_1",
+                                    function=_MockOpenAIFunction(name="search", arguments='{"q":'),
+                                ),
+                            ],
+                        )
+                    )
+                ]
+            ),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(index=0, function=_MockOpenAIFunction(arguments='"cats"}')),
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=_MockOpenAIDelta(), finish_reason="tool_calls")]),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -523,13 +538,18 @@ class TestOpenAIToolCalls:
         """Tool calls emitted when finish_reason=='tool_calls', not after stream ends."""
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0,
-                            function=_MockOpenAIFunction(name="calc")),
-                    ]),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(index=0, function=_MockOpenAIFunction(name="calc")),
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -542,15 +562,20 @@ class TestOpenAIToolCalls:
     async def test_fallback_json_parse_error_returns_empty_args(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0, id_="c1",
-                            function=_MockOpenAIFunction(name="f", arguments="{bad")),
-                    ]))]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(
+                                    index=0, id_="c1", function=_MockOpenAIFunction(name="f", arguments="{bad")
+                                ),
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=_MockOpenAIDelta(), finish_reason="tool_calls")]),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -562,15 +587,27 @@ class TestOpenAIToolCalls:
     async def test_multiple_parallel_tool_calls(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0, id_="a",
-                            function=_MockOpenAIFunction(name="weather", arguments='{"city":"Paris"}')),
-                        _MockOpenAIToolDelta(index=1, id_="b",
-                            function=_MockOpenAIFunction(name="time", arguments='{"tz":"UTC"}')),
-                    ]),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(
+                                    index=0,
+                                    id_="a",
+                                    function=_MockOpenAIFunction(name="weather", arguments='{"city":"Paris"}'),
+                                ),
+                                _MockOpenAIToolDelta(
+                                    index=1,
+                                    id_="b",
+                                    function=_MockOpenAIFunction(name="time", arguments='{"tz":"UTC"}'),
+                                ),
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
         ]
         stream = _FakeOpenAIStream(chunks)
         p.client.chat.completions.create = _acreate(stream)
@@ -584,9 +621,11 @@ class TestOpenAIToolCalls:
     async def test_tool_streams_max_tokens_when_set(self) -> None:
         p = OpenAIProvider(LLMConfig(api_key="sk-test", max_tokens=100))
         captured: dict[str, Any] = {}
+
         async def _capture(**kw: Any) -> _FakeOpenAIStream:
             captured.update(kw)
             return _FakeOpenAIStream([])
+
         p.client.chat.completions.create = _capture
         await _collect(p.stream([], [], ""))
         assert captured.get("max_tokens") == 100
@@ -595,8 +634,9 @@ class TestOpenAIToolCalls:
 class TestOpenAIRetries:
     @pytest.mark.asyncio
     async def test_retries_on_transient_error_and_succeeds(self) -> None:
-        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=2,
-            retry_backoff_secs=0.0, retry_backoff_multiplier=1.0))
+        p = OpenAIProvider(
+            LLMConfig(api_key="sk-test", max_retries=2, retry_backoff_secs=0.0, retry_backoff_multiplier=1.0)
+        )
         attempt = 0
 
         async def fake_create(**kw: Any) -> _FakeOpenAIStream:
@@ -605,6 +645,7 @@ class TestOpenAIRetries:
             if attempt < 3:
                 raise ConnectionError("transient")
             return _FakeOpenAIStream([])
+
         p.client.chat.completions.create = fake_create
 
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -613,8 +654,7 @@ class TestOpenAIRetries:
 
     @pytest.mark.asyncio
     async def test_raises_after_max_retries_exhausted(self) -> None:
-        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=1,
-            retry_backoff_secs=0.0))
+        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=1, retry_backoff_secs=0.0))
         p.client.chat.completions.create = _araise(ConnectionError("fail"))
 
         with pytest.raises(YomaiLLMError, match="fail"):
@@ -622,8 +662,7 @@ class TestOpenAIRetries:
 
     @pytest.mark.asyncio
     async def test_rate_limit_error_is_retried(self) -> None:
-        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=1,
-            retry_backoff_secs=0.0))
+        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=1, retry_backoff_secs=0.0))
         p._openai.RateLimitError = type("RateLimitError", (Exception,), {})
         p._openai.AuthenticationError = type("AuthenticationError", (Exception,), {})
 
@@ -635,6 +674,7 @@ class TestOpenAIRetries:
             if attempt < 2:
                 raise p._openai.RateLimitError("too many")
             return _FakeOpenAIStream([])
+
         p.client.chat.completions.create = fake_create
 
         await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -642,20 +682,17 @@ class TestOpenAIRetries:
 
     @pytest.mark.asyncio
     async def test_authentication_error_not_retried(self) -> None:
-        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=2,
-            retry_backoff_secs=0.0))
+        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=2, retry_backoff_secs=0.0))
         p._openai.AuthenticationError = type("AuthenticationError", (Exception,), {})
         p._openai.RateLimitError = type("RateLimitError", (Exception,), {})
-        p.client.chat.completions.create = _araise(
-            p._openai.AuthenticationError("bad key"))
+        p.client.chat.completions.create = _araise(p._openai.AuthenticationError("bad key"))
 
         with pytest.raises(YomaiLLMError, match="bad key"):
             await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
 
     @pytest.mark.asyncio
     async def test_non_transient_error_not_retried(self) -> None:
-        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=3,
-            retry_backoff_secs=0.0))
+        p = OpenAIProvider(LLMConfig(api_key="sk-test", max_retries=3, retry_backoff_secs=0.0))
         p.client.chat.completions.create = _araise(ValueError("bad"))
 
         with pytest.raises(YomaiLLMError, match="bad"):
@@ -672,8 +709,7 @@ class TestOpenAISchemaFormatting:
 
     def test_tool_result_messages_openai_format(self) -> None:
         p = OpenAIProvider(_provider())
-        msgs = p.tool_result_messages(
-            ToolCall(id="t1", name="search", args={"q": "cats"}), "results")
+        msgs = p.tool_result_messages(ToolCall(id="t1", name="search", args={"q": "cats"}), "results")
         assert msgs[0]["role"] == "assistant"
         assert msgs[0]["tool_calls"][0]["function"]["name"] == "search"
         assert msgs[1]["role"] == "tool"
@@ -728,8 +764,10 @@ class TestAnthropicEdgeCases:
     async def test_missing_usage_on_final_message(self) -> None:
         p = AnthropicProvider(_provider())
         stream = _MockAnthropicStream([], (0, 0))
+
         async def _final():
             return _MockAnthropicMessageUsage(None)
+
         stream.get_final_message = _final
         p.client.messages.stream = lambda **kw: _AsyncCtx(stream)
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -740,8 +778,9 @@ class TestAnthropicEdgeCases:
     async def test_tool_input_is_none(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_start",
-                content_block=_MockAnthropicEvent("tool_use", id="t1", name="f")),
+            _MockAnthropicEvent(
+                "content_block_start", content_block=_MockAnthropicEvent("tool_use", id="t1", name="f")
+            ),
             _MockAnthropicEvent("content_block_stop"),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (0, 0))
@@ -763,14 +802,18 @@ class TestAnthropicEdgeCases:
     async def test_partial_json_across_many_deltas(self) -> None:
         p = AnthropicProvider(_provider())
         events = [
-            _MockAnthropicEvent("content_block_start",
-                content_block=_MockAnthropicEvent("tool_use", id="x", name="calc", input={})),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json='{"a":')),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json='{"b":')),
-            _MockAnthropicEvent("content_block_delta",
-                delta=_MockAnthropicEvent("input_json_delta", partial_json='"nested"}}')),
+            _MockAnthropicEvent(
+                "content_block_start", content_block=_MockAnthropicEvent("tool_use", id="x", name="calc", input={})
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json='{"a":')
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json='{"b":')
+            ),
+            _MockAnthropicEvent(
+                "content_block_delta", delta=_MockAnthropicEvent("input_json_delta", partial_json='"nested"}}')
+            ),
             _MockAnthropicEvent("content_block_stop"),
         ]
         p.client.messages.stream = lambda **kw: _make_anthropic_stream(events, (0, 0))
@@ -816,11 +859,15 @@ class TestOpenAIEdgeCases:
     async def test_tool_delta_without_function(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[_MockOpenAIToolDelta(index=0, id_="c1")],
-                )),
-            ]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[_MockOpenAIToolDelta(index=0, id_="c1")],
+                        )
+                    ),
+                ]
+            ),
         ]
         p.client.chat.completions.create = _acreate(_FakeOpenAIStream(chunks))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -831,15 +878,19 @@ class TestOpenAIEdgeCases:
     async def test_out_of_order_tool_call_indices(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=1, id_="b",
-                            function=_MockOpenAIFunction(name="second")),
-                        _MockOpenAIToolDelta(index=0, id_="a",
-                            function=_MockOpenAIFunction(name="first")),
-                    ]),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(index=1, id_="b", function=_MockOpenAIFunction(name="second")),
+                                _MockOpenAIToolDelta(index=0, id_="a", function=_MockOpenAIFunction(name="first")),
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
         ]
         p.client.chat.completions.create = _acreate(_FakeOpenAIStream(chunks))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -852,13 +903,18 @@ class TestOpenAIEdgeCases:
     async def test_negative_tool_call_index(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=-1, id_="neg",
-                            function=_MockOpenAIFunction(name="neg")),
-                    ]),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(index=-1, id_="neg", function=_MockOpenAIFunction(name="neg")),
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
         ]
         p.client.chat.completions.create = _acreate(_FakeOpenAIStream(chunks))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -870,14 +926,22 @@ class TestOpenAIEdgeCases:
         """Tool calls accumulated during 'stop' finish are NOT emitted (stale deltas)."""
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0, id_="c1",
-                            function=_MockOpenAIFunction(name="search", arguments='{"q":"x"}')),
-                    ]))]),
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=None, finish_reason="stop")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(
+                                    index=0,
+                                    id_="c1",
+                                    function=_MockOpenAIFunction(name="search", arguments='{"q":"x"}'),
+                                ),
+                            ]
+                        )
+                    )
+                ]
+            ),
+            _MockOpenAIChunk(choices=[_MockOpenAIChoice(delta=None, finish_reason="stop")]),
         ]
         p.client.chat.completions.create = _acreate(_FakeOpenAIStream(chunks))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -900,13 +964,20 @@ class TestOpenAIEdgeCases:
     async def test_tool_call_id_missing_falls_back_to_name(self) -> None:
         p = OpenAIProvider(_provider())
         chunks = [
-            _MockOpenAIChunk(choices=[
-                _MockOpenAIChoice(delta=_MockOpenAIDelta(
-                    tool_calls=[
-                        _MockOpenAIToolDelta(index=0,
-                            function=_MockOpenAIFunction(name="calc", arguments='{"expr":"1+1"}')),
-                    ]),
-                    finish_reason="tool_calls")]),
+            _MockOpenAIChunk(
+                choices=[
+                    _MockOpenAIChoice(
+                        delta=_MockOpenAIDelta(
+                            tool_calls=[
+                                _MockOpenAIToolDelta(
+                                    index=0, function=_MockOpenAIFunction(name="calc", arguments='{"expr":"1+1"}')
+                                ),
+                            ]
+                        ),
+                        finish_reason="tool_calls",
+                    )
+                ]
+            ),
         ]
         p.client.chat.completions.create = _acreate(_FakeOpenAIStream(chunks))
         result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
@@ -923,11 +994,16 @@ class _MockAnthropicMessageUsage:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _simple_tool_fn():
     fn = lambda x: x  # noqa: E731
     fn.__name__ = "search"
-    fn.schema = {"name": "search", "description": "Search the web",
-        "properties": {"query": {"type": "string"}}, "required": ["query"]}
+    fn.schema = {
+        "name": "search",
+        "description": "Search the web",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+    }
     fn.tool_name = "search"
     return fn
 

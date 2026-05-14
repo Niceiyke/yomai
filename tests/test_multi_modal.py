@@ -1,4 +1,5 @@
 """Tests for multi-modal input (images, audio, documents) through AgentRequest."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -16,44 +17,54 @@ class TestMultiModalContent:
     def test_image_url_content_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
-            {"type": "text", "text": "Describe this image"},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "image_url", "image_url": {"url": "https://example.com/img.png"}},
+                {"type": "text", "text": "Describe this image"},
+            ]
+        )
         assert req.message_text == "Describe this image"
 
     def test_image_base64_content_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "image", "source": {"media_type": "image/png", "data": "base64..."}},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "image", "source": {"media_type": "image/png", "data": "base64..."}},
+            ]
+        )
         assert req.message_text == "[multi-modal]"
 
     def test_audio_content_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "input_audio", "input_audio": {"data": "base64...", "format": "wav"}},
-            {"type": "text", "text": "Transcribe this"},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "input_audio", "input_audio": {"data": "base64...", "format": "wav"}},
+                {"type": "text", "text": "Transcribe this"},
+            ]
+        )
         assert req.message_text == "Transcribe this"
 
     def test_document_url_content_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "document_url", "document_url": {"url": "https://example.com/doc.pdf"}},
-            {"type": "text", "text": "Summarize"},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "document_url", "document_url": {"url": "https://example.com/doc.pdf"}},
+                {"type": "text", "text": "Summarize"},
+            ]
+        )
         assert req.message_text == "Summarize"
 
     def test_document_base64_content_block(self) -> None:
         from yomai.core.schemas import AgentRequest
 
-        req = AgentRequest(message=[
-            {"type": "document", "source": {"media_type": "application/pdf", "data": "..."}},
-        ])
+        req = AgentRequest(
+            message=[
+                {"type": "document", "source": {"media_type": "application/pdf", "data": "..."}},
+            ]
+        )
         assert req.message_text == "[multi-modal]"
 
     def test_content_block_type_classifier(self) -> None:
@@ -115,7 +126,9 @@ class TestProviderNormalization:
     def test_normalize_document_block(self) -> None:
         from yomai.llm.base import _normalize_document_block
 
-        result = _normalize_document_block({"type": "document", "source": {"media_type": "application/pdf", "data": "..."}})
+        result = _normalize_document_block(
+            {"type": "document", "source": {"media_type": "application/pdf", "data": "..."}}
+        )
         assert result["type"] == "text"
         assert "application/pdf" in result["text"]
 
@@ -159,10 +172,15 @@ class TestProviderNormalization:
                 yield None
 
         provider = TestProv()
-        msgs = [{"role": "user", "content": [
-            {"type": "text", "text": "hi"},
-            {"type": "image", "source": {"media_type": "image/png", "data": "abc"}},
-        ]}]
+        msgs = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "hi"},
+                    {"type": "image", "source": {"media_type": "image/png", "data": "abc"}},
+                ],
+            }
+        ]
         normalized = provider._normalize_messages(msgs)
         assert normalized[0]["content"][0]["type"] == "text"
         assert normalized[0]["content"][1]["type"] == "image_url"

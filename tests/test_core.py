@@ -166,7 +166,9 @@ async def test_tool_call_streams_before_provider_done() -> None:
         return "ok"
 
     class SlowDoneProvider:
-        async def stream(self, messages: list[Message], tools: list[ToolSchema], system: str) -> AsyncIterator[LLMEvent]:
+        async def stream(
+            self, messages: list[Message], tools: list[ToolSchema], system: str
+        ) -> AsyncIterator[LLMEvent]:
             yield ToolCall(id="t1", name="instant", args={})
             await asyncio.sleep(0.05)
             yield Done(1, 1)
@@ -192,15 +194,15 @@ async def test_strip_reasoning() -> None:
     REASONING_CLOSE = "</think>"
 
     class ReasoningProvider:
-        async def stream(self, messages: list[Message], tools: list[ToolSchema], system: str) -> AsyncIterator[LLMEvent]:
+        async def stream(
+            self, messages: list[Message], tools: list[ToolSchema], system: str
+        ) -> AsyncIterator[LLMEvent]:
             yield TextChunk(REASONING_OPEN + "reasoning..." + REASONING_CLOSE + "\n")
             yield TextChunk("hello world")
             yield TextChunk(REASONING_OPEN + "done" + REASONING_CLOSE + "\n")
             yield Done(1, 1)
 
-    loop = AgentLoop(
-        cast(Any, ReasoningProvider()), [], AgentConfig(), LLMConfig(api_key="x", strip_reasoning=True)
-    )
+    loop = AgentLoop(cast(Any, ReasoningProvider()), [], AgentConfig(), LLMConfig(api_key="x", strip_reasoning=True))
     chunks: list[str] = []
     async for sse in loop.run("hi", [], ""):
         chunks.append(sse)
@@ -231,15 +233,19 @@ async def test_sqlite_memory_persists_across_instances() -> None:
         if os.path.exists(db):
             os.unlink(db)
 
+
 @pytest.mark.asyncio
 async def test_openapi_schema_generated() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
+
     @app.agent("/chat")
     async def chat(message: str) -> None:
         pass
+
     @app.workflow("/research")
     async def research(topic: str, runner=None) -> str:
         return topic
+
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/__yomai__/openapi.json")
@@ -256,14 +262,17 @@ async def test_openapi_schema_generated() -> None:
 @pytest.mark.asyncio
 async def test_openapi_schema_security_when_api_key_set() -> None:
     from yomai.config import DevConfig
+
     app = Yomai(
         llm=LLMConfig(api_key=""),
         memory=MemoryConfig(backend="dict", db_path="/unused"),
         dev=DevConfig(api_key="my-key"),
     )
+
     @app.agent("/secure")
     async def chat(msg: str) -> None:
         pass
+
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         resp = await client.get("/__yomai__/openapi.json")
@@ -275,14 +284,17 @@ async def test_openapi_schema_security_when_api_key_set() -> None:
 @pytest.mark.asyncio
 async def test_api_key_auth_on_agent() -> None:
     from yomai.config import DevConfig
+
     app = Yomai(
         llm=LLMConfig(api_key=""),
         memory=MemoryConfig(backend="dict", db_path="/unused"),
         dev=DevConfig(api_key="secret"),
     )
+
     @app.agent("/auth-chat")
     async def chat(message: str) -> None:
         pass
+
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         r1 = await client.post("/auth-chat", json={"message": "hi"})
@@ -411,7 +423,11 @@ async def test_workflow_body_is_pydantic_validated() -> None:
 async def test_per_route_api_key_override() -> None:
     from yomai.config import DevConfig
 
-    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"), dev=DevConfig(api_key="global"))
+    app = Yomai(
+        llm=LLMConfig(api_key=""),
+        memory=MemoryConfig(backend="dict", db_path="/unused"),
+        dev=DevConfig(api_key="global"),
+    )
 
     @app.agent("/public", api_key="")
     async def public(message: str) -> None:
@@ -425,7 +441,9 @@ async def test_per_route_api_key_override() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         assert (await client.post("/public", json={"message": "hi"})).status_code != 401
         assert (await client.post("/route-secret", json={})).status_code == 401
-        assert (await client.post("/route-secret", json={}, headers={"Authorization": "Bearer route"})).status_code != 401
+        assert (
+            await client.post("/route-secret", json={}, headers={"Authorization": "Bearer route"})
+        ).status_code != 401
 
 
 def test_signed_session_middleware_sign_and_verify() -> None:
@@ -566,4 +584,3 @@ def test_strip_reasoning_handles_split_blocks() -> None:
     result2 = loop._maybe_strip_reasoning("part2</think>after")
     assert result2 == "after"
     assert loop._inside_reasoning is False
-

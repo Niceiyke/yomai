@@ -1,4 +1,5 @@
 """Pytest fixtures and configuration for Yomai tests."""
+
 from __future__ import annotations
 
 import os
@@ -21,6 +22,7 @@ def redis_available() -> bool:
         return False
     try:
         import redis.asyncio  # noqa: F401
+
         return True
     except ImportError:
         return False

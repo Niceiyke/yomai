@@ -3,6 +3,7 @@
 These tests require a running Redis instance. They will be skipped if Redis
 is not available or if TEST_REDIS_URL is set to "none".
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -341,6 +342,7 @@ class TestYomaiTestClientIntegration:
 
         # Test tool calling
         from yomai.testing import MockToolCall
+
         tool_call = MockToolCall("get_weather", {"city": "Tokyo"})
 
         with mock_llm([[tool_call], ["Weather retrieved"]]):

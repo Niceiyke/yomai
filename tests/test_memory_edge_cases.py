@@ -2,6 +2,7 @@
 
 These tests are designed to find real bugs, not just pass.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -48,6 +49,7 @@ class TestConcurrentSaveIntegrity:
                 assert len(hist) >= 102
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
 
@@ -256,6 +258,7 @@ class TestSqliteEdgeCases:
                 assert len(await be2.load("s1")) == 2
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
     @pytest.mark.asyncio
@@ -270,6 +273,7 @@ class TestSqliteEdgeCases:
                 assert len(await be.load("s1")) == 2
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
     @pytest.mark.asyncio
@@ -284,4 +288,5 @@ class TestSqliteEdgeCases:
                 assert len(hist) == 2
             finally:
                 import os
+
                 os.unlink(tmp.name)

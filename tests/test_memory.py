@@ -1,4 +1,5 @@
 """Tests for memory backends: DictMemory, SqliteMemory, RedisMemory."""
+
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +16,7 @@ from yomai.memory.sqlite import SqliteMemory
 # ---------------------------------------------------------------------------
 # Shared test suite — runs against any MemoryBackend
 # ---------------------------------------------------------------------------
+
 
 class _SharedTests:
     """Mixin providing tests that every backend must pass."""
@@ -131,6 +133,7 @@ class _SharedTTLTests:
 # DictMemory tests
 # ---------------------------------------------------------------------------
 
+
 class TestDictMemory(_SharedTests, _SharedTTLTests):
     def make_backend(self, ttl_hours: int | None = None) -> DictMemory:
         kwargs: dict[str, Any] = {"max_messages": 20}
@@ -171,6 +174,7 @@ class TestDictMemory(_SharedTests, _SharedTTLTests):
 # SqliteMemory tests
 # ---------------------------------------------------------------------------
 
+
 class TestSqliteMemory(_SharedTests, _SharedTTLTests):
     def make_backend(self, ttl_hours: int | None = None) -> SqliteMemory:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -184,6 +188,7 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
 
     def teardown_method(self) -> None:
         import os
+
         if hasattr(self, "_tmp_path"):
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(self._tmp_path)
@@ -201,6 +206,7 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
                 assert hist[0]["content"] == "hello"
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
     @pytest.mark.asyncio
@@ -210,24 +216,28 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
                 be = SqliteMemory(db_path=tmp.name)
                 conn = be._connect()
                 conn.execute(
-                    "INSERT OR REPLACE INTO sessions (session_id, history_json) VALUES (?, ?)",
-                    ("bad", "not-json"))
+                    "INSERT OR REPLACE INTO sessions (session_id, history_json) VALUES (?, ?)", ("bad", "not-json")
+                )
                 conn.commit()
                 conn.close()
                 assert await be.load("bad") == []
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_migration_adds_updated_at_column(self) -> None:
         """When a sessions table exists without updated_at, init adds the column."""
         import sqlite3
+
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
             try:
                 conn = sqlite3.connect(tmp.name)
                 conn.execute("PRAGMA journal_mode=WAL")
-                conn.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, history_json TEXT NOT NULL)")
+                conn.execute(
+                    "CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, history_json TEXT NOT NULL)"
+                )
                 conn.commit()
                 conn.close()
 
@@ -237,6 +247,7 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
                 assert len(hist) == 2
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
     @pytest.mark.asyncio
@@ -252,12 +263,14 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
                     assert hist[0]["content"] == f"q{i}"
             finally:
                 import os
+
                 os.unlink(tmp.name)
 
 
 # ---------------------------------------------------------------------------
 # DictMemory edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestDictMemoryEdgeCases:
     @pytest.mark.asyncio
@@ -290,6 +303,7 @@ class TestDictMemoryEdgeCases:
 # SqliteMemory edge cases
 # ---------------------------------------------------------------------------
 
+
 class TestSqliteMemoryEdgeCases:
     def setup_method(self) -> None:
         with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
@@ -297,6 +311,7 @@ class TestSqliteMemoryEdgeCases:
 
     def teardown_method(self) -> None:
         import os
+
         if os.path.exists(self._tmp_path):
             os.unlink(self._tmp_path)
 
@@ -324,8 +339,7 @@ class TestSqliteMemoryEdgeCases:
     async def test_corrupted_json_in_db(self) -> None:
         be = SqliteMemory(db_path=self._tmp_path)
         conn = be._connect()
-        conn.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, strftime('%s','now'))",
-                      ("corrupt", "{bad json"))
+        conn.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, strftime('%s','now'))", ("corrupt", "{bad json"))
         conn.commit()
         conn.close()
         assert await be.load("corrupt") == []

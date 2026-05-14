@@ -44,6 +44,7 @@ async def test_swiftq_adapter_enqueues_internal_workflow_task(monkeypatch: pytes
             def decorator(fn: Any) -> FakeTask:
                 self.registered[opts["name"]] = fn
                 return FakeTask()
+
             return decorator
 
         def work(self, **kwargs: Any) -> None:

@@ -28,7 +28,9 @@ class FakeRedisStream:
             return [(event_id, fields) for event_id, fields in self.rows if event_id > after]
         return list(self.rows)
 
-    async def xread(self, streams: dict[str, str], block: int, count: int) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
+    async def xread(
+        self, streams: dict[str, str], block: int, count: int
+    ) -> list[tuple[str, list[tuple[str, dict[str, str]]]]]:
         key, after = next(iter(streams.items()))
         rows = [(event_id, fields) for event_id, fields in self.rows if event_id > after]
         return [] if not rows else [(key, rows[:count])]

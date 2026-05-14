@@ -1,4 +1,5 @@
 """Tests for OpenAPI schema, production auth, events, otel, and combined features."""
+
 from __future__ import annotations
 
 import asyncio
@@ -17,6 +18,7 @@ from yomai.config import (
 # ===========================================================================
 # #1 — Production auth enforcement (metadata endpoints)
 # ===========================================================================
+
 
 class TestProductionAuth:
     @pytest.mark.asyncio
@@ -108,6 +110,7 @@ class TestProductionAuth:
 # #2 — OpenAPI schema generation
 # ===========================================================================
 
+
 class TestOpenAPISchema:
     def test_build_openapi_empty(self) -> None:
         from yomai.openapi.schema import build_openapi
@@ -132,7 +135,12 @@ class TestOpenAPISchema:
                 "path_params": [],
                 "tools": ["get_weather"],
                 "tool_schemas": [
-                    {"name": "get_weather", "description": "Get weather", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+                    {
+                        "name": "get_weather",
+                        "description": "Get weather",
+                        "properties": {"city": {"type": "string"}},
+                        "required": ["city"],
+                    },
                 ],
                 "tags": ["agents"],
                 "summary": "Chat endpoint",
@@ -209,7 +217,9 @@ class TestOpenAPISchema:
             {
                 "path": "/old-chat",
                 "type": "agent",
-                "params": [], "body_params": [], "path_params": [],
+                "params": [],
+                "body_params": [],
+                "path_params": [],
                 "deprecated": True,
             }
         ]
@@ -224,7 +234,9 @@ class TestOpenAPISchema:
             {
                 "path": "/data",
                 "type": "get",
-                "params": [], "body_params": [], "path_params": [],
+                "params": [],
+                "body_params": [],
+                "path_params": [],
                 "response_model_schema": {"type": "object", "properties": {"x": {"type": "integer"}}},
             }
         ]
@@ -238,6 +250,7 @@ class TestOpenAPISchema:
 # ===========================================================================
 # #3 — Worker end-to-end integration
 # ===========================================================================
+
 
 class TestWorkerE2E:
     @pytest.mark.asyncio
@@ -323,6 +336,7 @@ class TestWorkerE2E:
 # #5 — yomai/events.py dataclass tests
 # ===========================================================================
 
+
 class TestEventsDataclasses:
     def test_agent_start_event(self) -> None:
         from yomai.events import AgentStartEvent
@@ -334,7 +348,9 @@ class TestEventsDataclasses:
     def test_agent_done_event(self) -> None:
         from yomai.events import AgentDoneEvent
 
-        ev = AgentDoneEvent(session_id="s1", reply="ok", input_tokens=10, output_tokens=5, cost_usd=0.001, duration_ms=100)
+        ev = AgentDoneEvent(
+            session_id="s1", reply="ok", input_tokens=10, output_tokens=5, cost_usd=0.001, duration_ms=100
+        )
         assert ev.input_tokens == 10
         assert ev.output_tokens == 5
         assert ev.cost_usd == 0.001
@@ -360,6 +376,7 @@ class TestEventsDataclasses:
 # ===========================================================================
 # #6 — opentelemetry.py integration tests
 # ===========================================================================
+
 
 class TestOpenTelemetry:
     def test_tracer_initialization(self) -> None:
@@ -404,6 +421,7 @@ class TestOpenTelemetry:
 # #7 — response_model + guardrails combined
 # ===========================================================================
 
+
 class TestCombinedFeatures:
     @pytest.mark.asyncio
     async def test_guardrails_with_response_model(self) -> None:
@@ -444,13 +462,16 @@ class TestCombinedFeatures:
                 return item
 
         from yomai.llm.base import Done, TextChunk
+
         original = OpenAIProvider.stream
 
         def fake_stream(self: Any, messages: Any, tools: Any, system: str) -> Any:
-            return FakeLLMStream([
-                TextChunk('{"city": "London", "temp": 22}'),
-                Done(input_tokens=5, output_tokens=10),
-            ])
+            return FakeLLMStream(
+                [
+                    TextChunk('{"city": "London", "temp": 22}'),
+                    Done(input_tokens=5, output_tokens=10),
+                ]
+            )
 
         OpenAIProvider.stream = fake_stream  # type: ignore[method-assign]
         try:

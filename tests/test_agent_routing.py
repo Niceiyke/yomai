@@ -1,4 +1,5 @@
 """Tests for agent-to-agent routing: AgentRegistry, agent_tool, cycles."""
+
 from __future__ import annotations
 
 import pytest

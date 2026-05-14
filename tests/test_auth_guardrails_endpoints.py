@@ -1,4 +1,5 @@
 """Tests for auth backends, guardrails, signed sessions, and built-in endpoints."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -10,6 +11,7 @@ from yomai.config import LLMConfig, MemoryConfig
 # ===========================================================================
 # #3 — Auth backend tests (APIKeyAuth, JWTAuth)
 # ===========================================================================
+
 
 class TestAPIKeyAuth:
     """API key authentication backend."""
@@ -135,6 +137,7 @@ class TestJWTAuth:
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
+
         token = pyjwt.encode({"sub": "user-1", "scopes": "read write"}, "secret", algorithm="HS256")
 
         auth = JWTAuth(secret="secret")
@@ -179,9 +182,11 @@ class TestJWTAuth:
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
+
         expired = pyjwt.encode(
             {"sub": "user-1", "exp": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)},
-            "secret", algorithm="HS256",
+            "secret",
+            algorithm="HS256",
         )
 
         auth = JWTAuth(secret="secret")
@@ -203,6 +208,7 @@ class TestJWTAuth:
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
+
         token = pyjwt.encode({"sub": "user-1"}, "secret", algorithm="HS384")
 
         auth = JWTAuth(secret="secret", algorithms=["HS256"])
@@ -224,6 +230,7 @@ class TestJWTAuth:
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
+
         token = pyjwt.encode({"sub": "user-1"}, "secret", algorithm="HS256")
 
         auth = JWTAuth(secret="secret")
@@ -246,6 +253,7 @@ class TestJWTAuth:
         # We can't easily uninstall PyJWT, but the code handles ImportError
         # by returning None. This test verifies the import guard path exists.
         from yomai.auth.jwt import JWTAuth
+
         auth = JWTAuth(secret="secret")
         scope = {
             "type": "http",
@@ -264,6 +272,7 @@ class TestJWTAuth:
 # ===========================================================================
 # #4 — Guardrails prompt-injection stripping
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 async def test_guardrails_strip_injection_patterns() -> None:
@@ -329,9 +338,7 @@ async def test_guardrails_no_match_passes_through() -> None:
         pass
 
     with mock_llm(["Normal response"]):
-        events = await YomaiTestClient(app).get_events(
-            "/chat", "What is the weather today?", session_id="s1"
-        )
+        events = await YomaiTestClient(app).get_events("/chat", "What is the weather today?", session_id="s1")
 
     chunks = [e.get("content", "") for e in events if e.get("type") == "chunk"]
     assert "Normal response" in "".join(chunks)
@@ -340,6 +347,7 @@ async def test_guardrails_no_match_passes_through() -> None:
 # ===========================================================================
 # #6 — SignedSessionMiddleware tests
 # ===========================================================================
+
 
 class TestSignedSessionMiddleware:
     """Signed session cookie middleware round-trip and rejection."""
@@ -441,6 +449,7 @@ class TestSignedSessionMiddleware:
         mw.app = dummy_app
 
         from starlette.types import Message
+
         async def send_dummy(message: Message) -> None:
             pass
 
@@ -457,6 +466,7 @@ class TestSignedSessionMiddleware:
 # ===========================================================================
 # #10 — Built-in endpoint coverage
 # ===========================================================================
+
 
 class TestBuiltinEndpoints:
     """Health, routes, OpenAPI, metrics, playground, docs endpoints."""

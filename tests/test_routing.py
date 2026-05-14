@@ -18,6 +18,7 @@ from yomai.testing import MockToolCall, YomaiTestClient, mock_llm
 # Type coercion tests
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_agent_path_params_injected() -> None:
     seen: dict[str, Any] = {}
@@ -155,6 +156,7 @@ async def test_optional_missing_param_uses_default() -> None:
 # RouteGroup + include_router
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_route_group_prefix_applied() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
@@ -271,6 +273,7 @@ async def test_route_group_prefix_must_start_with_slash() -> None:
 # Depends / dependency injection
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_depends_runs_before_handler() -> None:
     call_order: list[str] = []
@@ -337,6 +340,7 @@ async def test_depends_async_callable() -> None:
 # Per-route CORS
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_per_route_cors_headers() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
@@ -373,6 +377,7 @@ async def test_per_route_cors_overrides_group_cors() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # Route metadata — tags, summary, description, deprecated
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_openapi_deprecated_flag() -> None:
@@ -452,6 +457,7 @@ async def test_openapi_non_streaming_routes_have_get_delete_methods() -> None:
 # ─────────────────────────────────────────────────────────────────────────────
 # HEAD and OPTIONS
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_head_returns_200() -> None:
@@ -666,18 +672,22 @@ async def test_tool_arg_validation_integration() -> None:
         pass
 
     # Correct args — tool should execute successfully
-    with mock_llm([
-        MockToolCall(name="mytool", args={"items": ["a", "b"], "count": 5}),
-    ]):
+    with mock_llm(
+        [
+            MockToolCall(name="mytool", args={"items": ["a", "b"], "count": 5}),
+        ]
+    ):
         events = await YomaiTestClient(app).get_events("/tools", "hi")
     tool_events = [e for e in events if e.get("type") == "tool_end"]
     assert len(tool_events) == 1
     assert "Error:" not in str(tool_events[0].get("result", ""))
 
     # Wrong type for 'items' — should produce an error result
-    with mock_llm([
-        MockToolCall(name="mytool", args={"items": "not_a_list"}),
-    ]):
+    with mock_llm(
+        [
+            MockToolCall(name="mytool", args={"items": "not_a_list"}),
+        ]
+    ):
         events = await YomaiTestClient(app).get_events("/tools", "hi")
     tool_events = [e for e in events if e.get("type") == "tool_end"]
     assert len(tool_events) == 1

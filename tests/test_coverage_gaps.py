@@ -1,5 +1,6 @@
 """Tests for delegate edges, LLM retry edge cases, CLI, production sanitization,
 rate limiter boundaries, and stream cancellation."""
+
 from __future__ import annotations
 
 import asyncio
@@ -20,6 +21,7 @@ from yomai.config import (
 # ===========================================================================
 # #1 — Workflow delegate edges
 # ===========================================================================
+
 
 class TestDelegateEdgeCases:
     @pytest.mark.asyncio
@@ -46,6 +48,7 @@ class TestDelegateEdgeCases:
         events = await YomaiTestClient(app).get_events("/poem", "ignored")
         result = next(e for e in events if e.get("type") == "result")
         import json
+
         data = json.loads(result.get("content", "{}"))
         assert "Roses are red" in str(data.get("poem", ""))
 
@@ -74,6 +77,7 @@ class TestDelegateEdgeCases:
         events = await YomaiTestClient(app).get_events("/pipe", "ignored")
         result = next(e for e in events if e.get("type") == "result")
         import json
+
         data = json.loads(result.get("content", "{}"))
         assert data.get("answer") == "42"
 
@@ -133,6 +137,7 @@ class TestDelegateEdgeCases:
 # ===========================================================================
 # #2 — LLM provider retry edge cases
 # ===========================================================================
+
 
 class TestLLMRetryEdges:
     @pytest.mark.asyncio
@@ -227,6 +232,7 @@ class TestLLMRetryEdges:
 # #3 — CLI command tests
 # ===========================================================================
 
+
 class TestCLICommands:
     def test_new_scaffolds_valid_project(self) -> None:
         from typer.testing import CliRunner
@@ -270,7 +276,8 @@ class TestCLICommands:
         runner = CliRunner()
         with tempfile.TemporaryDirectory() as tmp:
             runner.invoke(
-                cli_app, ["deploy", "--output", f"{tmp}/Dockerfile", "main:app"],
+                cli_app,
+                ["deploy", "--output", f"{tmp}/Dockerfile", "main:app"],
                 catch_exceptions=False,
             )
             dockerfile_path = Path(tmp) / "Dockerfile"
@@ -317,6 +324,7 @@ class TestCLICommands:
                 "app = Yomai(llm=LLMConfig(api_key=''), memory=MemoryConfig(backend='dict'))\n"
             )
             import sys
+
             old_cwd = os.getcwd()
             os.chdir(tmp)
             sys.path.insert(0, tmp)
@@ -333,6 +341,7 @@ class TestCLICommands:
 # ===========================================================================
 # #4 — Production error sanitization
 # ===========================================================================
+
 
 class TestProductionErrorSanitization:
     @pytest.mark.asyncio
@@ -390,6 +399,7 @@ class TestProductionErrorSanitization:
         # by checking the source: `except (asyncio.CancelledError, GeneratorExit): raise`
         ErrorMiddleware(app=None)  # type: ignore[arg-type]
         import inspect
+
         source = inspect.getsource(ErrorMiddleware.dispatch)
         assert "CancelledError" in source
         assert "raise" in source  # The raise statement after except CancelledError
@@ -398,6 +408,7 @@ class TestProductionErrorSanitization:
 # ===========================================================================
 # #5 — Rate limiter edge cases
 # ===========================================================================
+
 
 class TestRateLimiterEdges:
     @pytest.mark.asyncio
@@ -491,6 +502,7 @@ class TestRateLimiterEdges:
                 class Script:
                     def __init__(self, parent: Any) -> None:
                         self._p = parent
+
                     async def __call__(self, keys: list[str], args: list[int]) -> int:
                         key = keys[0] if keys else ""
                         limit = args[0] if args else 0
@@ -500,6 +512,7 @@ class TestRateLimiterEdges:
                             return 1
                         self._p.keys[key] = current - 1
                         return 0
+
                 return Script(self)
 
         fake = FakeRedis()
@@ -513,6 +526,7 @@ class TestRateLimiterEdges:
 # ===========================================================================
 # #6 — Stream cancellation end-to-end
 # ===========================================================================
+
 
 class TestStreamCancellation:
     @pytest.mark.asyncio
@@ -551,6 +565,7 @@ class TestStreamCancellation:
         class Hanging:
             def __aiter__(self) -> Hanging:
                 return self
+
             async def __anext__(self) -> TextChunk:
                 await asyncio.sleep(3600)
                 return TextChunk("never")
@@ -571,9 +586,7 @@ class TestStreamCancellation:
         client = YomaiTestClient(app)
 
         # Start a streaming request in a task
-        asyncio.create_task(
-            client.get_events("/slow", "hello", session_id="cancel-me")
-        )
+        asyncio.create_task(client.get_events("/slow", "hello", session_id="cancel-me"))
 
         # Give it a moment to start
         await asyncio.sleep(0.1)
@@ -651,6 +664,7 @@ class TestStreamCancellation:
             for line in block.splitlines():
                 if line.startswith("data:"):
                     import json
+
                     with contextlib.suppress(json.JSONDecodeError):
                         events.append(json.loads(line.removeprefix("data:").strip()))
 

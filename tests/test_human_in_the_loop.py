@@ -12,9 +12,9 @@ from yomai.testing import MockToolCall, mock_llm
 from yomai.workflow import WorkflowRunner
 
 
-async def _start_workflow_and_get_interrupt(client: httpx.AsyncClient, app: Yomai,
-                                            path: str, body: dict, sid: str,
-                                            poll_ms: int = 50, max_wait: float = 5.0) -> str:
+async def _start_workflow_and_get_interrupt(
+    client: httpx.AsyncClient, app: Yomai, path: str, body: dict, sid: str, poll_ms: int = 50, max_wait: float = 5.0
+) -> str:
     """Start a workflow in the background, poll the interrupt store until an interrupt appears."""
     task = asyncio.create_task(client.post(path, json=body, headers={"X-Session-Id": sid}))
     deadline = asyncio.get_running_loop().time() + max_wait
@@ -31,6 +31,7 @@ async def _start_workflow_and_get_interrupt(client: httpx.AsyncClient, app: Yoma
 # -------------------------------------------------------------------
 # Workflow-level HITL
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_workflow_interrupt_resolves_and_task_completes() -> None:
@@ -81,12 +82,14 @@ async def test_interrupt_resume_endpoint_returns_200() -> None:
 # Agent-level HITL (request_human_input tool)
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_agent_calls_request_human_input_in_step() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/needy")
-    async def needy(message: str) -> None: pass
+    async def needy(message: str) -> None:
+        pass
 
     @app.workflow("/agent-hitl")
     async def agent_hitl(runner: WorkflowRunner):
@@ -111,7 +114,8 @@ async def test_agent_calls_request_human_input_in_delegate() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/helper")
-    async def helper(message: str) -> None: pass
+    async def helper(message: str) -> None:
+        pass
 
     @app.workflow("/del-hitl")
     async def del_hitl(runner: WorkflowRunner):
@@ -134,6 +138,7 @@ async def test_agent_calls_request_human_input_in_delegate() -> None:
 # -------------------------------------------------------------------
 # Edge cases
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_interrupt_double_resolve_returns_404() -> None:
@@ -178,6 +183,7 @@ async def test_interrupt_endpoint_exists() -> None:
 # -------------------------------------------------------------------
 # Approval flow (structured approve/reject)
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_approve_returns_structured_result() -> None:
@@ -245,10 +251,12 @@ async def test_approve_branches_on_rejection() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/writer")
-    async def writer(message: str) -> None: pass
+    async def writer(message: str) -> None:
+        pass
 
     @app.agent("/editor")
-    async def editor(message: str) -> None: pass
+    async def editor(message: str) -> None:
+        pass
 
     @app.workflow("/branch-approve")
     async def branch_approve(runner: WorkflowRunner):

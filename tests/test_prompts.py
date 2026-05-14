@@ -1,4 +1,5 @@
 """Tests for the prompt management system: templates, store, CLI."""
+
 from __future__ import annotations
 
 import tempfile
@@ -116,12 +117,8 @@ class TestPromptStore:
         from yomai.prompts.store import PromptStore
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            (Path(tmpdir) / "greeting.yaml").write_text(
-                "name: greeting\nversion: 1\ntemplate: Hello\nvariables: {}\n"
-            )
-            (Path(tmpdir) / "farewell.yaml").write_text(
-                "name: farewell\nversion: 1\ntemplate: Bye\nvariables: {}\n"
-            )
+            (Path(tmpdir) / "greeting.yaml").write_text("name: greeting\nversion: 1\ntemplate: Hello\nvariables: {}\n")
+            (Path(tmpdir) / "farewell.yaml").write_text("name: farewell\nversion: 1\ntemplate: Bye\nvariables: {}\n")
 
             store = PromptStore(tmpdir)
             specs = store.load_all()

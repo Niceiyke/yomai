@@ -13,15 +13,18 @@ from yomai.workflow import WorkflowRunner
 # Shared state
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_runner_state_accumulates_step_outputs() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/step1")
-    async def step1(message: str) -> None: pass
+    async def step1(message: str) -> None:
+        pass
 
     @app.agent("/step2")
-    async def step2(message: str) -> None: pass
+    async def step2(message: str) -> None:
+        pass
 
     @app.workflow("/stateful")
     async def stateful(runner: WorkflowRunner):
@@ -40,6 +43,7 @@ async def test_runner_state_accumulates_step_outputs() -> None:
     events = await YomaiTestClient(app).get_events("/stateful", "ignored")
     result = next(e for e in events if e.get("type") == "result")
     import json
+
     state = json.loads(result["content"])
     assert state == {"first": "alpha", "second": "beta"}
 
@@ -47,6 +51,7 @@ async def test_runner_state_accumulates_step_outputs() -> None:
 # -------------------------------------------------------------------
 # Retry on step failure
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_step_retry_succeeds_on_second_attempt() -> None:
@@ -59,24 +64,30 @@ async def test_step_retry_succeeds_on_second_attempt() -> None:
     call_count = 0
 
     class FailingThenOkProvider:
-        async def stream(self, messages: list[Message], tools: list[ToolSchema],
-                         system: str) -> AsyncIterator[LLMEvent]:
+        async def stream(
+            self, messages: list[Message], tools: list[ToolSchema], system: str
+        ) -> AsyncIterator[LLMEvent]:
             nonlocal call_count
             call_count += 1
             if call_count < 2:
                 raise RuntimeError("transient api error")
             yield Done(1, 1)
 
-        def tool_schemas(self, tools): return []
-        def tool_result_messages(self, tc, r): return []
+        def tool_schemas(self, tools):
+            return []
+
+        def tool_result_messages(self, tc, r):
+            return []
 
     # Replace provider factory to return our flaky provider
     original_build = app._build_provider
     app._build_provider = lambda: cast(Any, FailingThenOkProvider())
 
     try:
+
         @app.agent("/flaky")
-        async def flaky(message: str) -> None: pass
+        async def flaky(message: str) -> None:
+            pass
 
         @app.workflow("/retry-wf")
         async def retry_wf(runner: WorkflowRunner):
@@ -98,19 +109,25 @@ async def test_step_retry_exhausted_raises() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     class AlwaysFailsProvider:
-        async def stream(self, messages: list[Message], tools: list[ToolSchema],
-                         system: str) -> AsyncIterator[LLMEvent]:
+        async def stream(
+            self, messages: list[Message], tools: list[ToolSchema], system: str
+        ) -> AsyncIterator[LLMEvent]:
             raise RuntimeError("permanent failure")
 
-        def tool_schemas(self, tools): return []
-        def tool_result_messages(self, tc, r): return []
+        def tool_schemas(self, tools):
+            return []
+
+        def tool_result_messages(self, tc, r):
+            return []
 
     original_build = app._build_provider
     app._build_provider = lambda: cast(Any, AlwaysFailsProvider())
 
     try:
+
         @app.agent("/always-fails")
-        async def always_fails(message: str) -> None: pass
+        async def always_fails(message: str) -> None:
+            pass
 
         @app.workflow("/exhausted")
         async def exhausted(runner: WorkflowRunner):
@@ -126,6 +143,7 @@ async def test_step_retry_exhausted_raises() -> None:
 # Direct tool execution
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_runner_tool_calls_directly_without_llm() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
@@ -135,7 +153,8 @@ async def test_runner_tool_calls_directly_without_llm() -> None:
         return x * 2
 
     @app.agent("/noop")
-    async def noop(message: str) -> None: pass
+    async def noop(message: str) -> None:
+        pass
 
     @app.workflow("/tool-wf")
     async def tool_wf(runner: WorkflowRunner):
@@ -153,15 +172,18 @@ async def test_runner_tool_calls_directly_without_llm() -> None:
 # Branching
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_branch_takes_true_path() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/t")
-    async def t(message: str) -> None: pass
+    async def t(message: str) -> None:
+        pass
 
     @app.agent("/f")
-    async def f(message: str) -> None: pass
+    async def f(message: str) -> None:
+        pass
 
     @app.workflow("/branch-wf")
     async def branch_wf(topic: str, runner: WorkflowRunner):
@@ -174,8 +196,7 @@ async def test_branch_takes_true_path() -> None:
         )
 
     with mock_llm(["true-path"]):
-        events = await YomaiTestClient(app).get_events("/branch-wf", "test-topic",
-            extra_body={"topic": "ai-ethics"})
+        events = await YomaiTestClient(app).get_events("/branch-wf", "test-topic", extra_body={"topic": "ai-ethics"})
 
     result = next(e for e in events if e.get("type") == "result")
     assert "true-path" in str(result.get("content", ""))
@@ -186,10 +207,12 @@ async def test_branch_takes_false_path() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/t2")
-    async def t2(message: str) -> None: pass
+    async def t2(message: str) -> None:
+        pass
 
     @app.agent("/f2")
-    async def f2(message: str) -> None: pass
+    async def f2(message: str) -> None:
+        pass
 
     @app.workflow("/branch-false")
     async def branch_false(topic: str, runner: WorkflowRunner):
@@ -202,8 +225,7 @@ async def test_branch_takes_false_path() -> None:
         )
 
     with mock_llm(["false-path"]):
-        events = await YomaiTestClient(app).get_events("/branch-false", "test-topic",
-            extra_body={"topic": "hi"})
+        events = await YomaiTestClient(app).get_events("/branch-false", "test-topic", extra_body={"topic": "hi"})
 
     result = next(e for e in events if e.get("type") == "result")
     assert "false-path" in str(result.get("content", ""))
@@ -213,12 +235,14 @@ async def test_branch_takes_false_path() -> None:
 # Agent delegation
 # -------------------------------------------------------------------
 
+
 @pytest.mark.asyncio
 async def test_delegate_runs_sub_agent() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/specialist")
-    async def specialist(message: str) -> None: pass
+    async def specialist(message: str) -> None:
+        pass
 
     @app.workflow("/orchestrator")
     async def orchestrator(runner: WorkflowRunner):
@@ -236,7 +260,8 @@ async def test_delegate_stores_result_in_state() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/helper")
-    async def helper(message: str) -> None: pass
+    async def helper(message: str) -> None:
+        pass
 
     @app.workflow("/del-state")
     async def del_state(runner: WorkflowRunner):
@@ -253,6 +278,7 @@ async def test_delegate_stores_result_in_state() -> None:
 # -------------------------------------------------------------------
 # Graph events for new features
 # -------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_tool_emits_graph_events() -> None:
@@ -277,7 +303,8 @@ async def test_branch_emits_graph_events() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/x")
-    async def x(message: str) -> None: pass
+    async def x(message: str) -> None:
+        pass
 
     @app.workflow("/graph-branch")
     async def graph_branch(runner: WorkflowRunner):
@@ -302,7 +329,8 @@ async def test_delegate_emits_graph_events() -> None:
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     @app.agent("/sub")
-    async def sub(message: str) -> None: pass
+    async def sub(message: str) -> None:
+        pass
 
     @app.workflow("/graph-del")
     async def graph_del(runner: WorkflowRunner):

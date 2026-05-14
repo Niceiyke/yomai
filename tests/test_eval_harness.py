@@ -1,4 +1,5 @@
 """Tests for the eval harness: dataset, metrics, judge, runner, report."""
+
 from __future__ import annotations
 
 import json
@@ -15,14 +16,17 @@ class TestEvalDataset:
         from yomai.eval.dataset import load_dataset
 
         with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
-            json.dump({
-                "name": "test_ds",
-                "description": "Desc",
-                "cases": [
-                    {"name": "c1", "message": "What is 2+2?", "expected_output": "4"},
-                    {"name": "c2", "message": "hello"},
-                ],
-            }, f)
+            json.dump(
+                {
+                    "name": "test_ds",
+                    "description": "Desc",
+                    "cases": [
+                        {"name": "c1", "message": "What is 2+2?", "expected_output": "4"},
+                        {"name": "c2", "message": "hello"},
+                    ],
+                },
+                f,
+            )
             f.flush()
             ds = load_dataset(f.name)
             Path(f.name).unlink()
@@ -37,10 +41,13 @@ class TestEvalDataset:
         from yomai.eval.dataset import load_dataset
 
         with tempfile.NamedTemporaryFile(suffix=".json", mode="w", delete=False) as f:
-            json.dump([
-                {"message": "hello"},
-                {"message": "world"},
-            ], f)
+            json.dump(
+                [
+                    {"message": "hello"},
+                    {"message": "world"},
+                ],
+                f,
+            )
             f.flush()
             ds = load_dataset(f.name)
             Path(f.name).unlink()
@@ -101,18 +108,24 @@ class TestEvalMetrics:
     def test_tool_accuracy_full_match(self) -> None:
         from yomai.eval.metrics import compute_tool_accuracy
 
-        assert compute_tool_accuracy(
-            [{"name": "weather", "args": {"city": "Paris"}}],
-            [{"name": "weather", "args": {"city": "Paris"}}],
-        ) == 1.0
+        assert (
+            compute_tool_accuracy(
+                [{"name": "weather", "args": {"city": "Paris"}}],
+                [{"name": "weather", "args": {"city": "Paris"}}],
+            )
+            == 1.0
+        )
 
     def test_tool_accuracy_wrong_name(self) -> None:
         from yomai.eval.metrics import compute_tool_accuracy
 
-        assert compute_tool_accuracy(
-            [{"name": "search", "args": {}}],
-            [{"name": "weather", "args": {}}],
-        ) == 0.0
+        assert (
+            compute_tool_accuracy(
+                [{"name": "search", "args": {}}],
+                [{"name": "weather", "args": {}}],
+            )
+            == 0.0
+        )
 
     def test_tool_accuracy_no_expected(self) -> None:
         from yomai.eval.metrics import compute_tool_accuracy

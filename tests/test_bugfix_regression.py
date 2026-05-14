@@ -1,4 +1,5 @@
 """Regression tests for the 30 bug fixes."""
+
 from __future__ import annotations
 
 import asyncio
@@ -21,6 +22,7 @@ from yomai.workflow.runner import WorkflowRunner
 # #1 — Budget daily reset
 # ===========================================================================
 
+
 @pytest.mark.asyncio
 async def test_budget_daily_reset() -> None:
     """Daily budget counters reset at midnight."""
@@ -38,6 +40,7 @@ async def test_budget_daily_reset() -> None:
 
     # Force yesterday's date to trigger a reset
     import datetime
+
     tracker._last_reset_date = datetime.date.today() - datetime.timedelta(days=1)
 
     result = await tracker.check("s2", tokens_in=5, tokens_out=3, cost_estimate=0.1)
@@ -56,6 +59,7 @@ async def test_budget_daily_reset_on_new_day() -> None:
     assert result["exceeded"]
 
     import datetime
+
     tracker._last_reset_date = datetime.date.today() - datetime.timedelta(days=1)
 
     result = await tracker.check("s2", tokens_in=5, tokens_out=3, cost_estimate=0.05)
@@ -66,6 +70,7 @@ async def test_budget_daily_reset_on_new_day() -> None:
 # ===========================================================================
 # #3 — WorkflowRunner._run_agent propagates system prompt
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 async def test_workflow_step_uses_agent_system_prompt() -> None:
@@ -80,7 +85,6 @@ async def test_workflow_step_uses_agent_system_prompt() -> None:
         llm=LLMConfig(api_key=""),
         memory=MemoryConfig(backend="dict", db_path="/unused"),
     )
-
 
     @app.agent("/step", tools=[noop], system="You are a pirate translator")
     async def step_agent(message: str, session_id: str) -> None:
@@ -121,12 +125,14 @@ async def test_agent_timeout_fires_with_slow_llm() -> None:
     class Hanging:
         def __aiter__(self):
             return self
+
         async def __anext__(self):
             await asyncio.sleep(3600)
             return TextChunk("never")
 
     def slow_factory() -> Any:
         from yomai.llm.openai import OpenAIProvider
+
         provider = OpenAIProvider.__new__(OpenAIProvider)
         provider.model = "mock"
         provider.max_tokens = 1024
@@ -149,12 +155,14 @@ async def test_agent_timeout_fires_with_slow_llm() -> None:
 # #5 — Tool cache concurrency
 # ===========================================================================
 
+
 class _ConcurrentToolStream:
     """Async iterator that emits a ToolCall and then Done."""
 
     def __init__(self, tool_name: str, tool_args: dict[str, Any]) -> None:
         self._items: list[Any] = []
         from yomai.llm.base import Done, ToolCall
+
         self._items.append(ToolCall(id="t1", name=tool_name, args=tool_args))
         self._items.append(Done(input_tokens=1, output_tokens=1))
         self._pos = 0
@@ -196,12 +204,17 @@ async def test_tool_cache_concurrent_access_does_not_corrupt() -> None:
 
     def stream_factory(self, messages, tools, system):
         return _ConcurrentToolStream("expensive_op", {"x": 1})  # type: ignore[assignment, arg-type, misc, return-value]
+
     OpenAIProvider.stream = stream_factory  # type: ignore[method-assign]
     AnthropicProvider.stream = stream_factory  # type: ignore[method-assign]
     try:
+
         async def run_one() -> str:
             loop = AgentLoop(
-                app._build_provider(), [expensive_op], app.config.agent, app.config.llm,
+                app._build_provider(),
+                [expensive_op],
+                app.config.agent,
+                app.config.llm,
                 tool_cache=app._tool_cache,
             )
             chunks: list[str] = []
@@ -222,6 +235,7 @@ async def test_tool_cache_concurrent_access_does_not_corrupt() -> None:
 # ===========================================================================
 # #6 — fail_fast=False on WorkflowRunner.parallel()
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 async def test_parallel_fail_fast_false_collects_errors() -> None:
@@ -270,6 +284,7 @@ async def test_parallel_fail_fast_false_collects_errors() -> None:
 # #7 — DeprecationWarning on max_tool_calls
 # ===========================================================================
 
+
 def test_max_tool_calls_emits_deprecation_warning() -> None:
     """Using max_tool_calls emits a DeprecationWarning."""
     import warnings
@@ -288,14 +303,17 @@ def test_max_tool_calls_emits_deprecation_warning() -> None:
 # #15 — timeout_secs validation
 # ===========================================================================
 
+
 def test_timeout_secs_rejects_zero() -> None:
     from yomai.exceptions import YomaiConfigError
+
     with pytest.raises(YomaiConfigError):
         AgentConfig(timeout_secs=0)
 
 
 def test_timeout_secs_rejects_negative() -> None:
     from yomai.exceptions import YomaiConfigError
+
     with pytest.raises(YomaiConfigError):
         AgentConfig(timeout_secs=-5)
 
@@ -304,14 +322,17 @@ def test_timeout_secs_rejects_negative() -> None:
 # #17 — heartbeat_secs validation
 # ===========================================================================
 
+
 def test_heartbeat_secs_rejects_zero() -> None:
     from yomai.exceptions import YomaiConfigError
+
     with pytest.raises(YomaiConfigError):
         StreamingConfig(heartbeat_secs=0)
 
 
 def test_heartbeat_secs_rejects_negative() -> None:
     from yomai.exceptions import YomaiConfigError
+
     with pytest.raises(YomaiConfigError):
         StreamingConfig(heartbeat_secs=-1)
 
@@ -319,6 +340,7 @@ def test_heartbeat_secs_rejects_negative() -> None:
 # ===========================================================================
 # #2 — Multi-worker integration: Redis job + event store end-to-end
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires running Redis instance — tested via scripts/")
@@ -329,6 +351,7 @@ async def test_redis_job_store_e2e() -> None:
 # ===========================================================================
 # Graceful shutdown
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 async def test_draining_prevents_new_connections() -> None:
@@ -364,6 +387,7 @@ async def test_draining_prevents_new_connections() -> None:
 # ===========================================================================
 # Rate limiter — stale key cleanup
 # ===========================================================================
+
 
 @pytest.mark.asyncio
 async def test_rate_limiter_cleans_up_stale_concurrent_keys() -> None:
