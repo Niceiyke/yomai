@@ -40,7 +40,7 @@ app = Yomai(
         max_tokens=1024,
     ),
     memory=MemoryConfig(backend="sqlite", db_path="research_sessions.db"),
-    agent=AgentConfig(max_tool_calls=5, timeout_secs=180),
+    agent=AgentConfig(max_iterations=5, timeout_secs=180),
     budgets=BudgetConfig(max_tokens_per_request=8000, max_cost_per_day=1.00),
     dev=DevConfig(api_key=os.environ.get("YOMAI_API_KEY", "")),
 )

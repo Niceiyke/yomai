@@ -44,7 +44,7 @@ app = Yomai(
         max_tokens=512,
     ),
     memory=MemoryConfig(backend="dict"),
-    agent=AgentConfig(max_tool_calls=3, timeout_secs=120),
+    agent=AgentConfig(max_iterations=3, timeout_secs=120),
     budgets=BudgetConfig(max_tokens_per_request=6000),
     queue=QueueConfig(backend="inline"),
     dev=DevConfig(api_key=os.environ.get("YOMAI_API_KEY", "")),

@@ -19,7 +19,7 @@ from yomai.config import LLMConfig, MemoryConfig, BudgetConfig, AgentConfig
 app = Yomai(
     llm=LLMConfig(provider="anthropic"),
     memory=MemoryConfig(backend="sqlite", db_path="sessions.db"),
-    agent=AgentConfig(max_tool_calls=5, timeout_secs=120),
+    agent=AgentConfig(max_iterations=5, timeout_secs=120),
     budgets=BudgetConfig(max_tokens_per_request=8000),
 )
 
@@ -312,3 +312,23 @@ services:
         typer.echo("Generated docker-compose.yml")
     typer.echo("\n  docker build -t myapp .")
     typer.echo("  docker run -p 8000:8000 --env-file .env myapp")
+
+
+@app.command()
+def env() -> None:
+    """Print the current Yomai environment configuration."""
+    from yomai import env as yomai_env
+    from yomai._version import __version__
+
+    typer.echo(f"Yomai v{__version__}")
+    attrs = [
+        ("YOMAI_ENV", yomai_env.YOMAI_ENV),
+        ("YOMAI_APP_TITLE", yomai_env.YOMAI_APP_TITLE),
+        ("YOMAI_HANDLE_SIGTERM", yomai_env.YOMAI_HANDLE_SIGTERM),
+        ("YOMAI_API_KEY", "(set)" if yomai_env.YOMAI_API_KEY else "(not set)"),
+        ("ANTHROPIC_API_KEY", "(set)" if yomai_env.ANTHROPIC_API_KEY else "(not set)"),
+        ("OPENAI_API_KEY", "(set)" if yomai_env.OPENAI_API_KEY else "(not set)"),
+        ("REDIS_URL", yomai_env.REDIS_URL or ""),
+    ]
+    for key, value in attrs:
+        typer.echo(f"  {key:.<24s} = {value or '(not set)'}")

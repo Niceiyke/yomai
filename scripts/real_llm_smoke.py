@@ -109,7 +109,7 @@ async def smoke_agent_loop(values: dict[str, str], provider_name: str, show_even
         )
         provider = OpenAIProvider(cfg)
 
-    loop = AgentLoop(provider, [get_weather], AgentConfig(max_tool_calls=3), cfg)
+    loop = AgentLoop(provider, [get_weather], AgentConfig(max_iterations=3), cfg)
     events: list[str] = []
     started = time.monotonic()
     print(f"\n--- {provider_name} agent stream ---")
