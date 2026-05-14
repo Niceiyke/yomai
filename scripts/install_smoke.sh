@@ -6,9 +6,10 @@ mkdir -p "$TMP"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT
 
+rm -rf dist
 uv build >/dev/null
 uv venv "$TMP/.venv" >/dev/null
-uv pip install --python "$TMP/.venv/bin/python" dist/yomai-0.1.0-py3-none-any.whl >/dev/null
+uv pip install --python "$TMP/.venv/bin/python" dist/*.whl >/dev/null
 "$TMP/.venv/bin/python" - <<'PY'
 from yomai import Yomai, tool
 from yomai.config import Config, LLMConfig
