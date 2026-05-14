@@ -557,10 +557,6 @@ class TestStreamCancellation:
             memory=MemoryConfig(backend="dict", db_path="/unused"),
         )
 
-        @app.agent("/slow")
-        async def slow(message: str, session_id: str) -> None:
-            pass
-
         # Make the stream hang so we can cancel it
         class Hanging:
             def __aiter__(self) -> Hanging:
@@ -578,8 +574,13 @@ class TestStreamCancellation:
             provider.config = app.config.llm
             return provider
 
-        # Patch the app's provider factory so the agent stream hangs
+        # Patch the app's provider factory BEFORE registering agents
+        # (the route captures the factory reference at decoration time)
         app._build_provider = hanging_factory  # type: ignore[method-assign]
+
+        @app.agent("/slow")
+        async def slow(message: str, session_id: str) -> None:
+            pass
 
         client = YomaiTestClient(app)
 
