@@ -12,7 +12,7 @@ import signal
 import uuid
 from collections import Counter
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import BaseModel
@@ -70,6 +70,10 @@ from yomai.tools.cache import ToolCache
 from yomai.tools.registry import ToolFunction
 from yomai.workflow.events import sse_result
 from yomai.workflow.runner import WorkflowRunner
+
+if TYPE_CHECKING:
+    from yomai.jobs.interrupts import RedisInterruptStore
+    from yomai.queue.swiftq import SwiftQQueueBackend
 
 
 def _capture_type_locals(fn: Callable[..., Any]) -> None:
@@ -308,11 +312,11 @@ class Yomai:
         self.checkpoints = self._build_checkpoint_store()
         self.hooks = HookRegistry()
         self.rate_limiter = self._build_rate_limiter()
-        self._interrupt_store = InMemoryInterruptStore()
+        self._interrupt_store: InMemoryInterruptStore | RedisInterruptStore = InMemoryInterruptStore()  # type: ignore[valid-type]
         self._metrics_counters: Counter[str] = Counter()
         self._metrics_lock = asyncio.Lock()
         self._active_lock = asyncio.Lock()
-        self._queue_backend: Any | None = None
+        self._queue_backend: SwiftQQueueBackend | None = None  # type: ignore[valid-type]
         self._workflow_handlers: dict[str, Callable[..., Any]] = {}
         self._active_connections = 0
         self._draining = False
@@ -593,7 +597,7 @@ class Yomai:
 
         return StreamingResponse(stream(), media_type="text/event-stream")
 
-    def _get_queue_backend(self) -> Any | None:
+    def _get_queue_backend(self) -> SwiftQQueueBackend | None:  # type: ignore[valid-type]
         if self.config.queue.backend == "none":
             return None
         if self.config.queue.backend == "inline":
@@ -641,6 +645,37 @@ class Yomai:
         path_kwargs: dict[str, Any],
         max_retries: int = 0,
     ) -> None:
+        """Execute a workflow job in-process (inline queue mode).
+
+        Lifecycle
+        ---------
+        1. Creates an SSE event queue + consumer task that persists events to the
+           job event store (enabling SSE replay via ``/__yomai__/jobs/{id}/stream``).
+        2. Runs the workflow handler via a ``WorkflowRunner`` wired to the queue.
+        3. On success: emits ``sse_done()``, marks job ``succeeded``, releases
+           concurrent rate-limit slot.
+        4. On failure: retries up to ``max_retries`` times with exponential
+           backoff (1s base, ×2 per attempt).
+
+        Rate-limiting during retries
+        ---------------------------
+        The concurrent slot is released **before** each retry's backoff sleep
+        so other sessions can use the slot. Before each retry attempt, the
+        slot is re-acquired. If re-acquisition fails (slot exhausted), the
+        job is failed immediately with a ``RuntimeError``.
+
+        Cancellation
+        ------------
+        The ``asyncio.CancelledError`` raised by ``raise_if_cancelled()``
+        inside the workflow runner is re-raised (not retried), allowing the
+        caller to tear down cleanly.
+
+        Cleanup
+        -------
+        The ``finally`` block sends a sentinel ``None`` through the queue
+        to stop the consumer, then awaits it with a 10s timeout. If the
+        consumer doesn't finish, it is cancelled.
+        """
         queue: asyncio.Queue[str | None] = asyncio.Queue()
         current = await self.jobs.get(job_id)
         if current is not None and current.status == "cancelled":

@@ -80,6 +80,18 @@ class AgentConfig(BaseModel):
             )
         return v
 
+    @model_validator(mode="before")
+    @classmethod
+    def warn_deprecated_max_tool_calls(cls, data: Any) -> Any:
+        if isinstance(data, dict) and "max_tool_calls" in data:
+            import warnings
+            warnings.warn(
+                "`max_tool_calls` is deprecated, use `max_iterations` instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return data
+
 
 class StreamingConfig(BaseModel):
     heartbeat_secs: int = 15
