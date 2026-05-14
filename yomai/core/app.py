@@ -769,7 +769,7 @@ class Yomai:
                 await queue.put(None)
             try:
                 await asyncio.wait_for(consumer, timeout=10.0)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 consumer.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await consumer

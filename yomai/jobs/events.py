@@ -89,7 +89,7 @@ class InMemoryJobEventStore:
             try:
                 async with condition:
                     await asyncio.wait_for(condition.wait(), timeout=heartbeat_secs)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 yield None
 
 

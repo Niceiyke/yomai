@@ -351,7 +351,7 @@ class AgentRoute(BaseRoute):
                         break
                     try:
                         item = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         continue
                     if item is None:
                         break
@@ -536,7 +536,7 @@ class WorkflowRoute(BaseRoute):
                         break
                     try:
                         item = await asyncio.wait_for(queue.get(), timeout=0.1)
-                    except TimeoutError:
+                    except asyncio.TimeoutError:
                         continue
                     if item is None:
                         break
