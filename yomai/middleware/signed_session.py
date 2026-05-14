@@ -28,7 +28,7 @@ class SignedSessionMiddleware(BaseHTTPMiddleware):
             session_id = self.verify(value)
             if session_id is None:
                 return JSONResponse({"error": "Invalid session signature"}, status_code=401)
-            for i, (k, v) in enumerate(request.scope["headers"]):
+            for i, (k, _v) in enumerate(request.scope["headers"]):
                 if k.decode().lower() == self.header_name.lower():
                     request.scope["headers"][i] = (k, session_id.encode("utf-8"))
         return await call_next(request)

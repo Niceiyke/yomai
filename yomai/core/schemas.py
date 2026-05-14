@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -56,17 +56,17 @@ class DocumentBase64Content(BaseModel):
     source: dict[str, str]  # {"media_type": "application/pdf", "data": "..."}
 
 
-YomaiContentBlock = Union[
-    TextContent,
-    ImageUrlContent,
-    ImageBase64Content,
-    AudioInputContent,
-    DocumentUrlContent,
-    DocumentBase64Content,
-    dict[str, Any],
-]
+YomaiContentBlock = (
+    TextContent
+    | ImageUrlContent
+    | ImageBase64Content
+    | AudioInputContent
+    | DocumentUrlContent
+    | DocumentBase64Content
+    | dict[str, Any]
+)
 
-YomaiMessage = Union[str, list[YomaiContentBlock]]
+YomaiMessage = str | list[YomaiContentBlock]
 
 
 class AgentRequest(BaseModel):
@@ -96,9 +96,8 @@ class AgentRequest(BaseModel):
             return self.message
         text_parts: list[str] = []
         for block in self.message:
-            if isinstance(block, dict):
-                if block.get("type") == "text":
-                    text_parts.append(str(block.get("text", "")))
+            if isinstance(block, dict) and block.get("type") == "text":
+                text_parts.append(str(block.get("text", "")))
         if text_parts:
             return " ".join(text_parts)
         return "[multi-modal]"

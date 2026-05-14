@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, Optional, Union
+from typing import Any
 
 import pytest
 
@@ -81,7 +81,6 @@ async def test_workflow_step_uses_agent_system_prompt() -> None:
         memory=MemoryConfig(backend="dict", db_path="/unused"),
     )
 
-    system_sent: list[str] = []
 
     @app.agent("/step", tools=[noop], system="You are a pirate translator")
     async def step_agent(message: str, session_id: str) -> None:
@@ -195,7 +194,8 @@ async def test_tool_cache_concurrent_access_does_not_corrupt() -> None:
     original_openai = OpenAIProvider.stream
     original_anthropic = AnthropicProvider.stream
 
-    stream_factory = lambda self, messages, tools, system: _ConcurrentToolStream("expensive_op", {"x": 1})  # type: ignore[assignment, arg-type, misc, return-value]
+    def stream_factory(self, messages, tools, system):
+        return _ConcurrentToolStream("expensive_op", {"x": 1})  # type: ignore[assignment, arg-type, misc, return-value]
     OpenAIProvider.stream = stream_factory  # type: ignore[method-assign]
     AnthropicProvider.stream = stream_factory  # type: ignore[method-assign]
     try:
@@ -566,10 +566,10 @@ async def test_redis_job_store_create_is_idempotent() -> None:
 
 def test_validate_tool_args_union_accepts_any_member() -> None:
     """Union[str, int] accepts either str or int."""
-    from yomai.core.agent import AgentLoop
-    from typing import Union
 
-    def mytool(x: Union[str, int]) -> str:
+    from yomai.core.agent import AgentLoop
+
+    def mytool(x: str | int) -> str:
         return str(x)
 
     loop = AgentLoop.__new__(AgentLoop)
@@ -579,10 +579,10 @@ def test_validate_tool_args_union_accepts_any_member() -> None:
 
 def test_validate_tool_args_optional_allows_none() -> None:
     """Optional[int] accepts None."""
-    from yomai.core.agent import AgentLoop
-    from typing import Optional
 
-    def mytool(limit: Optional[int] = 10) -> str:
+    from yomai.core.agent import AgentLoop
+
+    def mytool(limit: int | None = 10) -> str:
         return str(limit)
 
     loop = AgentLoop.__new__(AgentLoop)
@@ -592,10 +592,10 @@ def test_validate_tool_args_optional_allows_none() -> None:
 
 def test_optional_int_rejects_string() -> None:
     """Optional[int] rejects str value."""
-    from yomai.core.agent import AgentLoop
-    from typing import Optional
 
-    def myfn(limit: Optional[int] = 10) -> str:
+    from yomai.core.agent import AgentLoop
+
+    def myfn(limit: int | None = 10) -> str:
         return str(limit)
 
     loop = AgentLoop.__new__(AgentLoop)
@@ -605,8 +605,9 @@ def test_optional_int_rejects_string() -> None:
 
 def test_validate_tool_args_handles_annotated() -> None:
     """Annotated[str, Field(...)] accepts str."""
-    from yomai.core.agent import AgentLoop
     from typing import Annotated
+
+    from yomai.core.agent import AgentLoop
 
     def mytool(query: Annotated[str, "some metadata"]) -> str:
         return query
@@ -617,10 +618,10 @@ def test_validate_tool_args_handles_annotated() -> None:
 
 def test_validate_tool_args_union_rejects_wrong_type() -> None:
     """Union[str, int] rejects list."""
-    from yomai.core.agent import AgentLoop
-    from typing import Union
 
-    def mytool(x: Union[str, int]) -> str:
+    from yomai.core.agent import AgentLoop
+
+    def mytool(x: str | int) -> str:
         return str(x)
 
     loop = AgentLoop.__new__(AgentLoop)

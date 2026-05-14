@@ -1,8 +1,6 @@
 """Tests for LLM provider implementations against mocked SDK streams."""
 from __future__ import annotations
 
-import asyncio
-import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -10,10 +8,9 @@ import pytest
 
 from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
-from yomai.llm.base import Done, TextChunk, ToolCall
 from yomai.llm.anthropic import AnthropicProvider
+from yomai.llm.base import Done, TextChunk, ToolCall
 from yomai.llm.openai import OpenAIProvider
-
 
 # ---------------------------------------------------------------------------
 # Mock Anthropic SDK types
@@ -340,7 +337,7 @@ class TestAnthropicRetries:
             return _make_anthropic_stream([], (0, 0))
         p.client.messages.stream = fake_stream
 
-        result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
+        await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
         assert attempt == 2
 
     @pytest.mark.asyncio
@@ -640,7 +637,7 @@ class TestOpenAIRetries:
             return _FakeOpenAIStream([])
         p.client.chat.completions.create = fake_create
 
-        result = await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
+        await _collect(p.stream([{"role": "user", "content": "hi"}], [], ""))
         assert attempt == 2
 
     @pytest.mark.asyncio
@@ -927,7 +924,6 @@ class _MockAnthropicMessageUsage:
 # ---------------------------------------------------------------------------
 
 def _simple_tool_fn():
-    import inspect
     fn = lambda x: x  # noqa: E731
     fn.__name__ = "search"
     fn.schema = {"name": "search", "description": "Search the web",

@@ -49,8 +49,8 @@ class PromptSpec:
     def from_yaml(cls, path: Path) -> PromptSpec:
         try:
             import yaml
-        except ImportError:
-            raise ImportError("PyYAML is required for prompt files. Install with: pip install pyyaml")
+        except ImportError as err:
+            raise ImportError("PyYAML is required for prompt files. Install with: pip install pyyaml") from err
         data = yaml.safe_load(path.read_text())
         return cls(
             name=data.get("name", path.stem.split(".")[0]),

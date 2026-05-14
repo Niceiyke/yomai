@@ -3,20 +3,16 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
-from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 
 from yomai.config import (
-    AgentConfig,
     DevConfig,
     LLMConfig,
     MemoryConfig,
 )
-
 
 # ===========================================================================
 # #1 — Production auth enforcement (metadata endpoints)
@@ -247,7 +243,7 @@ class TestWorkerE2E:
     @pytest.mark.asyncio
     async def test_inline_workflow_job_completes_and_produces_events(self) -> None:
         from yomai import Yomai
-        from yomai.testing import YomaiTestClient, mock_llm
+        from yomai.testing import YomaiTestClient
         from yomai.workflow.runner import WorkflowRunner
 
         app = Yomai(
@@ -291,7 +287,7 @@ class TestWorkerE2E:
             memory=MemoryConfig(backend="dict", db_path="/unused"),
         )
 
-        job = await app.create_job("job-check", "/route")
+        await app.create_job("job-check", "/route")
         await app.jobs.update_status("job-check", "running")
 
         client = YomaiTestClient(app)
@@ -373,8 +369,8 @@ class TestOpenTelemetry:
         assert tracer.service_name == "test-svc"
 
     def test_tracer_setup_registers_hooks(self) -> None:
-        from yomai.contrib.opentelemetry import YomaiTracer
         from yomai import Yomai
+        from yomai.contrib.opentelemetry import YomaiTracer
 
         app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict"))
         tracer = YomaiTracer(service_name="hooked")
@@ -385,8 +381,8 @@ class TestOpenTelemetry:
         assert len(app.hooks._handlers) >= initial_count
 
     def test_setup_function_registers_hooks(self) -> None:
-        from yomai.contrib.opentelemetry import setup
         from yomai import Yomai
+        from yomai.contrib.opentelemetry import setup
 
         app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict"))
         initial = len(app.hooks._handlers)
@@ -395,6 +391,7 @@ class TestOpenTelemetry:
 
     def test_cli_env_command(self) -> None:
         from typer.testing import CliRunner
+
         from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
@@ -412,10 +409,10 @@ class TestCombinedFeatures:
     async def test_guardrails_with_response_model(self) -> None:
         """Guardrails strip before structured output extraction."""
         from pydantic import BaseModel
+
         from yomai import Yomai
-        from yomai.testing import YomaiTestClient, mock_llm
-        from yomai.testing.mock_llm import MockToolCall
         from yomai.llm.openai import OpenAIProvider
+        from yomai.testing import YomaiTestClient
 
         class Weather(BaseModel):
             city: str
@@ -447,7 +444,7 @@ class TestCombinedFeatures:
                 return item
 
         from yomai.llm.base import Done, TextChunk
-        original = getattr(OpenAIProvider, "stream")
+        original = OpenAIProvider.stream
 
         def fake_stream(self: Any, messages: Any, tools: Any, system: str) -> Any:
             return FakeLLMStream([

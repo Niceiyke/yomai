@@ -7,13 +7,11 @@ from __future__ import annotations
 import asyncio
 import json
 import tempfile
-from typing import Any
 
 import pytest
 
 from yomai.memory.dict import DictMemory
 from yomai.memory.sqlite import SqliteMemory
-
 
 # =============================================================================
 # Concurrency / race condition tests
@@ -37,21 +35,20 @@ class TestConcurrentSaveIntegrity:
 
     @pytest.mark.asyncio
     async def test_sqlite_memory_concurrent_saves_preserve_all_messages(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name, max_messages=0)
-            await be.save("s1", "init", "ok")
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name, max_messages=0)
+                await be.save("s1", "init", "ok")
 
-            async def save_msg(i: int) -> None:
-                await be.save("s1", f"q{i}", f"a{i}")
+                async def save_msg(i: int) -> None:
+                    await be.save("s1", f"q{i}", f"a{i}")
 
-            await asyncio.gather(*(save_msg(i) for i in range(50)))
-            hist = await be.load("s1")
-            assert len(hist) >= 102
-        finally:
-            import os
-            os.unlink(tmp.name)
+                await asyncio.gather(*(save_msg(i) for i in range(50)))
+                hist = await be.load("s1")
+                assert len(hist) >= 102
+            finally:
+                import os
+                os.unlink(tmp.name)
 
 
 class TestRedisMemoryConcurrencyFix:
@@ -244,50 +241,47 @@ class TestWeirdContent:
 class TestSqliteEdgeCases:
     @pytest.mark.asyncio
     async def test_table_recreated_if_dropped(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name)
-            # Drop the table
-            conn = be._connect()
-            conn.execute("DROP TABLE sessions")
-            conn.commit()
-            conn.close()
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name)
+                # Drop the table
+                conn = be._connect()
+                conn.execute("DROP TABLE sessions")
+                conn.commit()
+                conn.close()
 
-            # Re-create backend — should migrate silently
-            be2 = SqliteMemory(db_path=tmp.name)
-            await be2.save("s1", "hello", "world")
-            assert len(await be2.load("s1")) == 2
-        finally:
-            import os
-            os.unlink(tmp.name)
+                # Re-create backend — should migrate silently
+                be2 = SqliteMemory(db_path=tmp.name)
+                await be2.save("s1", "hello", "world")
+                assert len(await be2.load("s1")) == 2
+            finally:
+                import os
+                os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_vacuum_does_not_crash(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name)
-            conn = be._connect()
-            conn.execute("VACUUM")
-            conn.close()
-            await be.save("s1", "hello", "world")
-            assert len(await be.load("s1")) == 2
-        finally:
-            import os
-            os.unlink(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name)
+                conn = be._connect()
+                conn.execute("VACUUM")
+                conn.close()
+                await be.save("s1", "hello", "world")
+                assert len(await be.load("s1")) == 2
+            finally:
+                import os
+                os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_busy_timeout_handles_locked_db(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name)
-            # Each operation opens/closes a connection, so busy timeout
-            # shouldn't be triggered in normal usage.
-            await be.save("s1", "hello", "world")
-            hist = await be.load("s1")
-            assert len(hist) == 2
-        finally:
-            import os
-            os.unlink(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name)
+                # Each operation opens/closes a connection, so busy timeout
+                # shouldn't be triggered in normal usage.
+                await be.save("s1", "hello", "world")
+                hist = await be.load("s1")
+                assert len(hist) == 2
+            finally:
+                import os
+                os.unlink(tmp.name)

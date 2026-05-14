@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+import contextlib
 import tempfile
 from typing import Any
 
@@ -11,7 +11,6 @@ import pytest
 from yomai.memory.base import MemoryBackend
 from yomai.memory.dict import DictMemory
 from yomai.memory.sqlite import SqliteMemory
-
 
 # ---------------------------------------------------------------------------
 # Shared test suite — runs against any MemoryBackend
@@ -174,9 +173,8 @@ class TestDictMemory(_SharedTests, _SharedTTLTests):
 
 class TestSqliteMemory(_SharedTests, _SharedTTLTests):
     def make_backend(self, ttl_hours: int | None = None) -> SqliteMemory:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        self._tmp_path = tmp.name
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self._tmp_path = tmp.name
         kwargs: dict[str, Any] = {"max_messages": 20, "db_path": tmp.name}
         if ttl_hours is not None:
             kwargs["ttl_hours"] = ttl_hours
@@ -187,80 +185,74 @@ class TestSqliteMemory(_SharedTests, _SharedTTLTests):
     def teardown_method(self) -> None:
         import os
         if hasattr(self, "_tmp_path"):
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 os.unlink(self._tmp_path)
-            except FileNotFoundError:
-                pass
 
     @pytest.mark.asyncio
     async def test_persists_across_instances(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be1 = SqliteMemory(db_path=tmp.name, max_messages=20)
-            await be1.save("s1", "hello", "world")
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be1 = SqliteMemory(db_path=tmp.name, max_messages=20)
+                await be1.save("s1", "hello", "world")
 
-            be2 = SqliteMemory(db_path=tmp.name)
-            hist = await be2.load("s1")
-            assert len(hist) == 2
-            assert hist[0]["content"] == "hello"
-        finally:
-            import os
-            os.unlink(tmp.name)
+                be2 = SqliteMemory(db_path=tmp.name)
+                hist = await be2.load("s1")
+                assert len(hist) == 2
+                assert hist[0]["content"] == "hello"
+            finally:
+                import os
+                os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_corrupted_json_returns_empty(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name)
-            conn = be._connect()
-            conn.execute(
-                "INSERT OR REPLACE INTO sessions (session_id, history_json) VALUES (?, ?)",
-                ("bad", "not-json"))
-            conn.commit()
-            conn.close()
-            assert await be.load("bad") == []
-        finally:
-            import os
-            os.unlink(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name)
+                conn = be._connect()
+                conn.execute(
+                    "INSERT OR REPLACE INTO sessions (session_id, history_json) VALUES (?, ?)",
+                    ("bad", "not-json"))
+                conn.commit()
+                conn.close()
+                assert await be.load("bad") == []
+            finally:
+                import os
+                os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_migration_adds_updated_at_column(self) -> None:
         """When a sessions table exists without updated_at, init adds the column."""
         import sqlite3
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            conn = sqlite3.connect(tmp.name)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, history_json TEXT NOT NULL)")
-            conn.commit()
-            conn.close()
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                conn = sqlite3.connect(tmp.name)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, history_json TEXT NOT NULL)")
+                conn.commit()
+                conn.close()
 
-            be = SqliteMemory(db_path=tmp.name)
-            await be.save("s1", "hello", "world")
-            hist = await be.load("s1")
-            assert len(hist) == 2
-        finally:
-            import os
-            os.unlink(tmp.name)
+                be = SqliteMemory(db_path=tmp.name)
+                await be.save("s1", "hello", "world")
+                hist = await be.load("s1")
+                assert len(hist) == 2
+            finally:
+                import os
+                os.unlink(tmp.name)
 
     @pytest.mark.asyncio
     async def test_save_and_load_on_many_sessions(self) -> None:
-        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        tmp.close()
-        try:
-            be = SqliteMemory(db_path=tmp.name)
-            for i in range(20):
-                await be.save(f"s{i}", f"q{i}", f"a{i}")
-            for i in range(20):
-                hist = await be.load(f"s{i}")
-                assert len(hist) == 2
-                assert hist[0]["content"] == f"q{i}"
-        finally:
-            import os
-            os.unlink(tmp.name)
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            try:
+                be = SqliteMemory(db_path=tmp.name)
+                for i in range(20):
+                    await be.save(f"s{i}", f"q{i}", f"a{i}")
+                for i in range(20):
+                    hist = await be.load(f"s{i}")
+                    assert len(hist) == 2
+                    assert hist[0]["content"] == f"q{i}"
+            finally:
+                import os
+                os.unlink(tmp.name)
 
 
 # ---------------------------------------------------------------------------
@@ -300,24 +292,24 @@ class TestDictMemoryEdgeCases:
 
 class TestSqliteMemoryEdgeCases:
     def setup_method(self) -> None:
-        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-        self._tmp.close()
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            self._tmp_path = tmp.name
 
     def teardown_method(self) -> None:
         import os
-        if os.path.exists(self._tmp.name):
-            os.unlink(self._tmp.name)
+        if os.path.exists(self._tmp_path):
+            os.unlink(self._tmp_path)
 
     @pytest.mark.asyncio
     async def test_clear_removes_row(self) -> None:
-        be = SqliteMemory(db_path=self._tmp.name)
+        be = SqliteMemory(db_path=self._tmp_path)
         await be.save("s1", "hello", "world")
         await be.clear("s1")
         assert await be.load("s1") == []
 
     @pytest.mark.asyncio
     async def test_concurrent_loads_do_not_block(self) -> None:
-        be = SqliteMemory(db_path=self._tmp.name)
+        be = SqliteMemory(db_path=self._tmp_path)
         await be.save("s1", "hello", "world")
         results = await asyncio.gather(*[be.load("s1") for _ in range(10)])
         for r in results:
@@ -325,12 +317,12 @@ class TestSqliteMemoryEdgeCases:
 
     @pytest.mark.asyncio
     async def test_load_missing_session_returns_empty(self) -> None:
-        be = SqliteMemory(db_path=self._tmp.name)
+        be = SqliteMemory(db_path=self._tmp_path)
         assert await be.load("missing") == []
 
     @pytest.mark.asyncio
     async def test_corrupted_json_in_db(self) -> None:
-        be = SqliteMemory(db_path=self._tmp.name)
+        be = SqliteMemory(db_path=self._tmp_path)
         conn = be._connect()
         conn.execute("INSERT OR REPLACE INTO sessions VALUES (?, ?, strftime('%s','now'))",
                       ("corrupt", "{bad json"))

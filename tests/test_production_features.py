@@ -3,17 +3,14 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
-from typing import Any, Literal, cast
+from typing import Any, Literal
 
-import httpx
 import pytest
 from pydantic import BaseModel
 
 from yomai import Yomai, tool
 from yomai.config import BudgetConfig, LLMConfig, MemoryConfig
 from yomai.testing import YomaiTestClient, mock_llm
-from yomai.workflow import WorkflowRunner
-
 
 # -------------------------------------------------------------------
 # Plugin system
@@ -26,7 +23,7 @@ async def test_plugin_setup_called() -> None:
     def my_plugin(app: Yomai) -> None:
         calls.append("setup")
 
-    app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"),
+    Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"),
                 plugins=[my_plugin])
     assert calls == ["setup"]
 
@@ -131,8 +128,9 @@ async def test_response_model_retries_on_bad_json() -> None:
 # -------------------------------------------------------------------
 
 def test_format_validation_error_cleans_output() -> None:
-    from yomai.core.router import _format_validation_error
     from pydantic import ValidationError
+
+    from yomai.core.router import _format_validation_error
 
     try:
         from yomai.core.schemas import AgentRequest

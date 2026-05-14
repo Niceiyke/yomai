@@ -11,6 +11,8 @@ if TYPE_CHECKING:
     from yomai.budget import BudgetTracker
     from yomai.hooks import HookRegistry
 
+import contextlib
+
 from yomai.config import AgentConfig, LLMConfig
 from yomai.llm.base import Done, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
 from yomai.streaming.sse import (
@@ -417,10 +419,8 @@ class AgentLoop:
 
     def _validate_tool_args(self, fn: ToolFunction, args: dict[str, Any]) -> None:
         hints: dict[str, Any] = {}
-        try:
+        with contextlib.suppress(Exception):
             hints = get_type_hints(fn, include_extras=False)
-        except Exception:
-            pass
         if not hints:
             hints = getattr(fn, "__annotations__", {})
         for name, value in args.items():
@@ -469,9 +469,8 @@ class AgentLoop:
                     elif candidate_origin is list:
                         if isinstance(value, list):
                             break
-                    elif candidate_origin is dict:
-                        if isinstance(value, dict):
-                            break
+                    elif candidate_origin is dict and isinstance(value, dict):
+                        break
                 else:
                     if non_none:
                         type_names = (

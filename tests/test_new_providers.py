@@ -1,13 +1,12 @@
 """Tests for new LLM providers: Gemini, Mistral, Groq, vLLM."""
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
-
 
 # ===========================================================================
 # Gemini Provider
@@ -20,9 +19,8 @@ class TestGeminiProvider:
         with patch.dict("sys.modules", {"google.genai": None}):
             config = LLMConfig(provider="gemini", api_key="test-key", base_url=None)
             from yomai.llm.gemini import GeminiProvider
-            with pytest.raises(YomaiLLMError, match="not installed"):
-                with patch("builtins.__import__", side_effect=ImportError):
-                    GeminiProvider(config)
+            with pytest.raises(YomaiLLMError, match="not installed"), patch("builtins.__import__", side_effect=ImportError):
+                GeminiProvider(config)
 
     @pytest.mark.skip(reason="Requires google-genai SDK not installed")
     def test_init_requires_api_key(self) -> None:
@@ -84,9 +82,8 @@ class TestMistralProvider:
         with patch.dict("sys.modules", {"mistralai": None}):
             config = LLMConfig(provider="mistral", api_key="test-key", base_url=None)
             from yomai.llm.mistral import MistralProvider
-            with pytest.raises(YomaiLLMError, match="not installed"):
-                with patch("builtins.__import__", side_effect=ImportError):
-                    MistralProvider(config)
+            with pytest.raises(YomaiLLMError, match="not installed"), patch("builtins.__import__", side_effect=ImportError):
+                MistralProvider(config)
 
     @pytest.mark.skip(reason="Requires mistralai SDK not installed")
     def test_init_requires_api_key(self) -> None:
@@ -98,8 +95,8 @@ class TestMistralProvider:
             MistralProvider(config)
 
     def test_tool_result_messages(self) -> None:
-        from yomai.llm.mistral import MistralProvider
         from yomai.llm.base import ToolCall
+        from yomai.llm.mistral import MistralProvider
 
         class StubProvider(MistralProvider):
             pass
@@ -194,6 +191,7 @@ class TestLLMConfigProviderDefaults:
 
     def test_all_providers_in_literal(self) -> None:
         from typing import get_args
+
         from yomai.config import LLMConfig
         field = LLMConfig.model_fields.get("provider")
         if field is not None:
@@ -211,11 +209,11 @@ class TestMockLLMAllProviders:
     """mock_llm patches all provider types."""
 
     def test_mock_llm_covers_all_providers(self) -> None:
-        from yomai.testing.mock_llm import mock_llm
         from yomai.llm.gemini import GeminiProvider
-        from yomai.llm.mistral import MistralProvider
         from yomai.llm.groq import GroqProvider
+        from yomai.llm.mistral import MistralProvider
         from yomai.llm.vllm import VLLMProvider
+        from yomai.testing.mock_llm import mock_llm
 
         with mock_llm(responses=["Hello from mock"]):
             # All providers should have their stream patched

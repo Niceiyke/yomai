@@ -41,13 +41,7 @@ def _make_agent_tool(
 
     extra_params: list[inspect.Parameter] = []
     for p in params:
-        if p.name == "message":
-            continue
-        elif p.name == "session_id":
-            continue
-        elif p.name == "runner":
-            continue
-        elif p.name == "request":
+        if p.name == "message" or p.name == "session_id" or p.name == "runner" or p.name == "request":
             continue
         else:
             extra_params.append(p)

@@ -81,10 +81,9 @@ def compute_tool_accuracy(
         for actual in actual_tools:
             act_name = actual.get("name", "")
             act_args = actual.get("args", {})
-            if exp_name == act_name:
-                if not exp_args or _args_subset(exp_args, act_args):
-                    matched += 1
-                    break
+            if exp_name == act_name and (not exp_args or _args_subset(exp_args, act_args)):
+                matched += 1
+                break
     return matched / len(expected_tools)
 
 

@@ -9,9 +9,7 @@ import pytest
 from yomai import Yomai, tool
 from yomai.config import LLMConfig, MemoryConfig
 from yomai.testing import MockToolCall, YomaiTestClient, mock_llm
-from yomai.tools.cache import ToolCache
 from yomai.workflow import WorkflowRunner
-
 
 # -------------------------------------------------------------------
 # Tool result caching
@@ -154,8 +152,9 @@ async def test_agent_accepts_string_message() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_accepts_multimodal_content_array() -> None:
-    import httpx
     from typing import Any, cast
+
+    import httpx
 
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
@@ -176,8 +175,9 @@ async def test_agent_accepts_multimodal_content_array() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_rejects_empty_content_array() -> None:
-    import httpx
     from typing import Any, cast
+
+    import httpx
 
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
@@ -192,31 +192,33 @@ async def test_agent_rejects_empty_content_array() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_rejects_missing_message() -> None:
-    import httpx
     from typing import Any, cast
+
+    import httpx
 
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
     transport = httpx.ASGITransport(app=cast(Any, app))
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        r = await client.post("/__yomai__/routes", json={})  # doesn't matter, just testing
+        await client.post("/__yomai__/routes", json={})  # doesn't matter, just testing
         # Actually let's test the agent endpoint
-        r = await client.post("/chat", json={"wrong": "field"})
+        await client.post("/chat", json={"wrong": "field"})
 
     # This endpoint doesn't exist in this isolated test, skip
     # Just verify message validation in a simple way
-    from yomai.core.schemas import AgentRequest
     from pydantic import ValidationError
+
+    from yomai.core.schemas import AgentRequest
 
     try:
         AgentRequest(message="")  # type: ignore[arg-type]
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValidationError:
         pass
 
     try:
         AgentRequest(message=[])  # type: ignore[arg-type]
-        assert False, "should have raised"
+        raise AssertionError("should have raised")
     except ValidationError:
         pass
 

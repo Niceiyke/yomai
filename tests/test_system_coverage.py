@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import os
 import tempfile
-from pathlib import Path
 from typing import Any
 
 import pytest
 
 from yomai.config import LLMConfig, MemoryConfig
-
 
 # ===========================================================================
 # #1 — Memory backend edge tests
@@ -240,16 +238,12 @@ class TestPluginSystem:
 
     def test_load_plugins_string_path(self) -> None:
         from yomai.plugins import load_plugins
-
-        import yomai.plugins
         result = load_plugins(["yomai.plugins:plugin"])
         assert len(result) == 1
         assert callable(result[0])
 
     def test_load_plugins_string_no_colon_defaults_to_setup(self) -> None:
         from yomai.plugins import load_plugins
-
-        import yomai.plugins
         # This module has a 'plugin' attribute but no 'setup'
         with pytest.raises(AttributeError):
             load_plugins(["yomai.plugins"])
@@ -267,7 +261,7 @@ class TestPluginSystem:
             load_plugins([42])  # type: ignore[list-item]
 
     def test_plugin_decorator_registers(self) -> None:
-        from yomai.plugins import plugin, _registry
+        from yomai.plugins import _registry, plugin
 
         original_len = len(_registry)
 
@@ -286,6 +280,7 @@ class TestPluginSystem:
 class TestResponseModelExtraction:
     def test_chooses_rightmost_json_object(self) -> None:
         from pydantic import BaseModel
+
         from yomai.core.router import AgentRoute
 
         class Output(BaseModel):
@@ -299,6 +294,7 @@ class TestResponseModelExtraction:
 
     def test_falls_back_to_start_if_rightmost_fails(self) -> None:
         from pydantic import BaseModel
+
         from yomai.core.router import AgentRoute
 
         class Output(BaseModel):
@@ -363,6 +359,7 @@ class TestMultiModalMessages:
 class TestToolAnnotationEdges:
     def test_literal_enum_generation(self) -> None:
         from typing import Literal
+
         from yomai.tools.decorator import _json_schema_for_annotation
 
         schema = _json_schema_for_annotation(Literal["small", "medium", "large"])
@@ -394,6 +391,7 @@ class TestToolAnnotationEdges:
 
     def test_datetime_generation(self) -> None:
         import datetime
+
         from yomai.tools.decorator import _json_schema_for_annotation
 
         schema = _json_schema_for_annotation(datetime.datetime)
@@ -402,6 +400,7 @@ class TestToolAnnotationEdges:
 
     def test_uuid_generation(self) -> None:
         from uuid import UUID
+
         from yomai.tools.decorator import _json_schema_for_annotation
 
         schema = _json_schema_for_annotation(UUID)
@@ -410,7 +409,9 @@ class TestToolAnnotationEdges:
 
     def test_annotated_with_field_description(self) -> None:
         from typing import Annotated
+
         from pydantic import Field
+
         from yomai.tools.decorator import _extract_description, _json_schema_for_annotation
 
         annotation = Annotated[str, Field(description="User's name")]
@@ -422,6 +423,7 @@ class TestToolAnnotationEdges:
 
     def test_pydantic_model_in_schema(self) -> None:
         from pydantic import BaseModel
+
         from yomai.tools.decorator import _json_schema_for_annotation
 
         class Address(BaseModel):
@@ -462,7 +464,7 @@ class TestStreamingDisconnect:
         # disconnect path exists by checking the request.is_disconnected call
         # in the generate() loop. A full disconnect test would need raw ASGI.
         # Here we verify the generate loop checks is_disconnected.
-        from yomai.testing import YomaiTestClient, mock_llm
+        from yomai.testing import mock_llm
         with mock_llm(["hello"]):
             events = await YomaiTestClient(app).get_events("/chat", "test", session_id="dc")
         assert any(e.get("type") == "done" for e in events)
@@ -631,8 +633,9 @@ class TestSchemaType:
         assert app._schema_type(UUID) == "string"
 
     def test_base_model_returns_object(self) -> None:
-        from yomai import Yomai
         from pydantic import BaseModel
+
+        from yomai import Yomai
 
         class Foo(BaseModel):
             x: int
@@ -641,8 +644,9 @@ class TestSchemaType:
         assert app._schema_type(Foo) == "object"
 
     def test_enum_returns_string(self) -> None:
-        from yomai import Yomai
         import enum
+
+        from yomai import Yomai
 
         class Color(enum.Enum):
             RED = "red"

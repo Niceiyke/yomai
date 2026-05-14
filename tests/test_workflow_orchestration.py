@@ -9,7 +9,6 @@ from yomai.config import LLMConfig, MemoryConfig
 from yomai.testing import YomaiTestClient, mock_llm
 from yomai.workflow import WorkflowRunner
 
-
 # -------------------------------------------------------------------
 # Shared state
 # -------------------------------------------------------------------
@@ -51,8 +50,9 @@ async def test_runner_state_accumulates_step_outputs() -> None:
 
 @pytest.mark.asyncio
 async def test_step_retry_succeeds_on_second_attempt() -> None:
-    from yomai.llm.base import Done, LLMEvent, Message, ToolSchema
     from collections.abc import AsyncIterator
+
+    from yomai.llm.base import Done, LLMEvent, Message, ToolSchema
 
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 
@@ -91,8 +91,9 @@ async def test_step_retry_succeeds_on_second_attempt() -> None:
 
 @pytest.mark.asyncio
 async def test_step_retry_exhausted_raises() -> None:
-    from yomai.llm.base import LLMEvent, Message, ToolSchema
     from collections.abc import AsyncIterator
+
+    from yomai.llm.base import LLMEvent, Message, ToolSchema
 
     app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict", db_path="/unused"))
 

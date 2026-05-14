@@ -196,12 +196,11 @@ class GeminiProvider(LLMProvider):
 
             except Exception as exc:
                 err_str = str(exc).lower()
-                if "429" in err_str or "resource_exhausted" in err_str or _is_transient(exc):
-                    if attempt < max_retries:
-                        last_exc = exc
-                        delay = backoff * (multiplier**attempt)
-                        await asyncio.sleep(delay)
-                        continue
+                if ("429" in err_str or "resource_exhausted" in err_str or _is_transient(exc)) and attempt < max_retries:
+                    last_exc = exc
+                    delay = backoff * (multiplier**attempt)
+                    await asyncio.sleep(delay)
+                    continue
                 raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#gemini") from exc
 
         if last_exc is not None:

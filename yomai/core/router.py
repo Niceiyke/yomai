@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime
 import enum
 import inspect
@@ -848,6 +849,7 @@ class AgentWSRoute(AgentRoute):
 
     async def handle_ws(self, websocket: WebSocket) -> None:
         from yomai.streaming.ws import (
+            parse_ws_message,
             ws_chunk,
             ws_done,
             ws_error,
@@ -859,7 +861,6 @@ class AgentWSRoute(AgentRoute):
             ws_tool_progress,
             ws_tool_start,
             ws_usage,
-            parse_ws_message,
         )
 
         await websocket.accept()
@@ -1009,17 +1010,13 @@ class AgentWSRoute(AgentRoute):
         except asyncio.CancelledError:
             pass
         except Exception:
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.send_text(ws_error("Internal server error", "server_error"))
-            except Exception:
-                pass
         finally:
             self._active = False
             heartbeat_task.cancel()
-            try:
+            with contextlib.suppress(Exception):
                 await websocket.close()
-            except Exception:
-                pass
 
     async def _ws_heartbeat(self, websocket: WebSocket) -> None:
         from yomai.streaming.ws import ws_ping

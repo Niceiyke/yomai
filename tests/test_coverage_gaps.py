@@ -3,6 +3,7 @@ rate limiter boundaries, and stream cancellation."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import tempfile
 from pathlib import Path
@@ -12,15 +13,9 @@ from unittest.mock import patch
 import pytest
 
 from yomai.config import (
-    AgentConfig,
-    BudgetConfig,
-    DevConfig,
     LLMConfig,
     MemoryConfig,
-    RateLimitConfig,
-    StreamingConfig,
 )
-
 
 # ===========================================================================
 # #1 — Workflow delegate edges
@@ -94,7 +89,7 @@ class TestDelegateEdgeCases:
         )
 
         # Create a job, then cancel it
-        job = await app.create_job("job-cancel-test", "/test")
+        await app.create_job("job-cancel-test", "/test")
         await app.jobs.update_status("job-cancel-test", "cancelled")
 
         # Create runner with the cancelled job_id
@@ -234,8 +229,9 @@ class TestLLMRetryEdges:
 
 class TestCLICommands:
     def test_new_scaffolds_valid_project(self) -> None:
-        from yomai.cli.main import app as cli_app
         from typer.testing import CliRunner
+
+        from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
         with tempfile.TemporaryDirectory() as tmp:
@@ -247,8 +243,9 @@ class TestCLICommands:
             assert (Path(tmp) / "myproject" / ".env.example").exists()
 
     def test_new_fails_if_directory_exists(self) -> None:
-        from yomai.cli.main import app as cli_app
         from typer.testing import CliRunner
+
+        from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,7 +255,7 @@ class TestCLICommands:
 
     def test_help_shows_version(self) -> None:
         from typer.testing import CliRunner
-        from yomai._version import __version__
+
         from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
@@ -267,11 +264,12 @@ class TestCLICommands:
 
     def test_deploy_generates_dockerfile(self) -> None:
         from typer.testing import CliRunner
+
         from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
         with tempfile.TemporaryDirectory() as tmp:
-            result = runner.invoke(
+            runner.invoke(
                 cli_app, ["deploy", "--output", f"{tmp}/Dockerfile", "main:app"],
                 catch_exceptions=False,
             )
@@ -286,8 +284,9 @@ class TestCLICommands:
             assert "FROM python" in content
 
     def test_serve_command_exists(self) -> None:
-        from yomai.cli.main import app as cli_app
         from typer.testing import CliRunner
+
+        from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
         result = runner.invoke(cli_app, ["serve", "--help"])
@@ -295,8 +294,9 @@ class TestCLICommands:
         assert "Production" in result.stdout
 
     def test_dev_command_exists(self) -> None:
-        from yomai.cli.main import app as cli_app
         from typer.testing import CliRunner
+
+        from yomai.cli.main import app as cli_app
 
         runner = CliRunner()
         result = runner.invoke(cli_app, ["dev", "--help"])
@@ -304,9 +304,9 @@ class TestCLICommands:
         assert "reload" in result.stdout.lower()
 
     def test_worker_rejects_non_swiftq_backend(self) -> None:
-        from yomai import Yomai
-        from yomai.cli.main import app as cli_app
         from typer.testing import CliRunner
+
+        from yomai.cli.main import app as cli_app
 
         # Create a minimal app module
         with tempfile.TemporaryDirectory() as tmp:
@@ -388,7 +388,7 @@ class TestProductionErrorSanitization:
 
         # Verify the middleware's exception handler re-raises CancelledError
         # by checking the source: `except (asyncio.CancelledError, GeneratorExit): raise`
-        mw = ErrorMiddleware(app=None)  # type: ignore[arg-type]
+        ErrorMiddleware(app=None)  # type: ignore[arg-type]
         import inspect
         source = inspect.getsource(ErrorMiddleware.dispatch)
         assert "CancelledError" in source
@@ -534,9 +534,9 @@ class TestStreamCancellation:
     async def test_cancel_active_stream(self) -> None:
         """Cancelling an active stream via the endpoint cancels the task."""
         from yomai import Yomai
-        from yomai.testing import YomaiTestClient
         from yomai.llm.base import TextChunk
         from yomai.llm.openai import OpenAIProvider
+        from yomai.testing import YomaiTestClient
 
         app = Yomai(
             llm=LLMConfig(provider="openai", api_key="sk-fake"),
@@ -556,7 +556,6 @@ class TestStreamCancellation:
                 return TextChunk("never")
 
         def hanging_factory() -> Any:
-            from yomai.llm.openai import OpenAIProvider
             provider = OpenAIProvider.__new__(OpenAIProvider)
             provider.model = "mock"
             provider.max_tokens = 1024
@@ -572,7 +571,7 @@ class TestStreamCancellation:
         client = YomaiTestClient(app)
 
         # Start a streaming request in a task
-        stream_task = asyncio.create_task(
+        asyncio.create_task(
             client.get_events("/slow", "hello", session_id="cancel-me")
         )
 
@@ -589,7 +588,6 @@ class TestStreamCancellation:
     @pytest.mark.asyncio
     async def test_job_cancel_endpoint(self) -> None:
         from yomai import Yomai
-        from yomai.jobs.models import JobRecord
         from yomai.testing import YomaiTestClient
 
         app = Yomai(
@@ -598,7 +596,7 @@ class TestStreamCancellation:
         )
 
         # Create a job directly
-        job = await app.create_job("job-001", "/test-workflow")
+        await app.create_job("job-001", "/test-workflow")
 
         client = YomaiTestClient(app)
         async with await client._client() as http:
@@ -634,7 +632,7 @@ class TestStreamCancellation:
         )
 
         # Create a job and append some events
-        job = await app.create_job("job-replay", "/test")
+        await app.create_job("job-replay", "/test")
         await app.job_events.append("job-replay", "chunk", {"type": "chunk", "content": "hello"})
         await app.job_events.append("job-replay", "done", {"type": "done"})
 
@@ -653,10 +651,8 @@ class TestStreamCancellation:
             for line in block.splitlines():
                 if line.startswith("data:"):
                     import json
-                    try:
+                    with contextlib.suppress(json.JSONDecodeError):
                         events.append(json.loads(line.removeprefix("data:").strip()))
-                    except json.JSONDecodeError:
-                        pass
 
         types = [e.get("type") for e in events]
         assert "chunk" in types

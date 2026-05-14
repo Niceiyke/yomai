@@ -50,8 +50,8 @@ def _load_json(path: Path) -> EvalDataset:
 def _load_yaml(path: Path) -> EvalDataset:
     try:
         import yaml
-    except ImportError:
-        raise ImportError("PyYAML is required for YAML datasets. Install with: pip install pyyaml")
+    except ImportError as err:
+        raise ImportError("PyYAML is required for YAML datasets. Install with: pip install pyyaml") from err
     data = yaml.safe_load(path.read_text())
     cases_data = data if isinstance(data, list) else data.get("cases", data.get("tests", []))
     meta = {} if isinstance(data, list) else {k: v for k, v in data.items() if k not in ("cases", "tests")}

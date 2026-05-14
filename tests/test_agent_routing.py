@@ -18,7 +18,7 @@ class TestAgentRegistry:
         assert registry.get_agent("nope") is None
 
     def test_duplicate_register_diff_path_raises(self) -> None:
-        from yomai.agents.routing import AgentRegistry, AgentCallError
+        from yomai.agents.routing import AgentCallError, AgentRegistry
 
         def agent_a(message: str, session_id: str) -> None: ...
         def agent_b(message: str, session_id: str) -> None: ...
@@ -57,7 +57,7 @@ class TestAgentRegistry:
         assert tool.tool_name == "call_my_agent"
 
     def test_as_tool_unknown_raises(self) -> None:
-        from yomai.agents.routing import AgentRegistry, AgentCallError
+        from yomai.agents.routing import AgentCallError, AgentRegistry
 
         registry = AgentRegistry()
         with pytest.raises(AgentCallError, match="not found"):

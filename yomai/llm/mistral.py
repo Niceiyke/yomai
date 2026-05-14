@@ -180,12 +180,11 @@ class MistralProvider(LLMProvider):
 
             except Exception as exc:
                 err_str = str(exc).lower()
-                if "rate" in err_str or "429" in err_str or _is_transient(exc):
-                    if attempt < max_retries:
-                        last_exc = exc
-                        delay = backoff * (multiplier**attempt)
-                        await asyncio.sleep(delay)
-                        continue
+                if ("rate" in err_str or "429" in err_str or _is_transient(exc)) and attempt < max_retries:
+                    last_exc = exc
+                    delay = backoff * (multiplier**attempt)
+                    await asyncio.sleep(delay)
+                    continue
                 raise YomaiLLMError(str(exc), docs="https://yomai.dev/llm#mistral") from exc
 
         if last_exc is not None:

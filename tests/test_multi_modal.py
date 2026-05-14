@@ -68,7 +68,7 @@ class TestMultiModalContent:
         assert AgentRequest.content_block_type({"type": "unknown"}) == "unknown"
 
     def test_pydantic_content_models(self) -> None:
-        from yomai.core.schemas import TextContent, ImageUrlSource, ImageUrlContent, AudioInputContent, AudioInputSource
+        from yomai.core.schemas import AudioInputContent, AudioInputSource, ImageUrlContent, ImageUrlSource, TextContent
 
         text = TextContent(text="Hello")
         assert text.text == "Hello"

@@ -5,8 +5,7 @@ from typing import Any
 
 import pytest
 
-from yomai.config import LLMConfig, MemoryConfig, DevConfig
-
+from yomai.config import LLMConfig, MemoryConfig
 
 # ===========================================================================
 # #3 — Auth backend tests (APIKeyAuth, JWTAuth)
@@ -17,9 +16,9 @@ class TestAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_valid_key_passes(self) -> None:
-        from yomai.auth.api_key import APIKeyAuth
+
         from yomai._types import Request
-        from starlette.testclient import TestClient
+        from yomai.auth.api_key import APIKeyAuth
 
         auth = APIKeyAuth(keys={"secret-key"})
 
@@ -38,8 +37,8 @@ class TestAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_invalid_key_fails(self) -> None:
-        from yomai.auth.api_key import APIKeyAuth
         from yomai._types import Request
+        from yomai.auth.api_key import APIKeyAuth
 
         auth = APIKeyAuth(keys={"secret-key"})
         scope = {
@@ -55,8 +54,8 @@ class TestAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_missing_header_fails(self) -> None:
-        from yomai.auth.api_key import APIKeyAuth
         from yomai._types import Request
+        from yomai.auth.api_key import APIKeyAuth
 
         auth = APIKeyAuth(keys={"secret-key"})
         scope = {
@@ -72,8 +71,8 @@ class TestAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_empty_keys_always_fails(self) -> None:
-        from yomai.auth.api_key import APIKeyAuth
         from yomai._types import Request
+        from yomai.auth.api_key import APIKeyAuth
 
         auth = APIKeyAuth()
         scope = {
@@ -89,8 +88,8 @@ class TestAPIKeyAuth:
 
     @pytest.mark.asyncio
     async def test_multiple_keys_match(self) -> None:
-        from yomai.auth.api_key import APIKeyAuth
         from yomai._types import Request
+        from yomai.auth.api_key import APIKeyAuth
 
         auth = APIKeyAuth(keys={"key-a", "key-b", "key-c"})
         scope = {
@@ -108,8 +107,8 @@ class TestAPIKeyAuth:
     @pytest.mark.asyncio
     async def test_timing_safe_comparison(self) -> None:
         """verify hmac.compare_digest is used (no timing leak)."""
-        from yomai.auth.api_key import APIKeyAuth
         from yomai._types import Request
+        from yomai.auth.api_key import APIKeyAuth
 
         # Very long key to amplify potential timing differences
         long_key = "a" * 1000
@@ -132,10 +131,10 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_valid_jwt_passes(self) -> None:
         pytest.importorskip("jwt")
-        from yomai.auth.jwt import JWTAuth
-        from yomai._types import Request
-
         import jwt as pyjwt
+
+        from yomai._types import Request
+        from yomai.auth.jwt import JWTAuth
         token = pyjwt.encode({"sub": "user-1", "scopes": "read write"}, "secret", algorithm="HS256")
 
         auth = JWTAuth(secret="secret")
@@ -156,8 +155,8 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_invalid_jwt_fails(self) -> None:
         pytest.importorskip("jwt")
-        from yomai.auth.jwt import JWTAuth
         from yomai._types import Request
+        from yomai.auth.jwt import JWTAuth
 
         auth = JWTAuth(secret="secret")
         scope = {
@@ -174,11 +173,12 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_expired_jwt_fails(self) -> None:
         pytest.importorskip("jwt")
-        from yomai.auth.jwt import JWTAuth
-        from yomai._types import Request
+        import datetime
 
         import jwt as pyjwt
-        import datetime
+
+        from yomai._types import Request
+        from yomai.auth.jwt import JWTAuth
         expired = pyjwt.encode(
             {"sub": "user-1", "exp": datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=1)},
             "secret", algorithm="HS256",
@@ -199,10 +199,10 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_wrong_algorithm_fails(self) -> None:
         pytest.importorskip("jwt")
-        from yomai.auth.jwt import JWTAuth
-        from yomai._types import Request
-
         import jwt as pyjwt
+
+        from yomai._types import Request
+        from yomai.auth.jwt import JWTAuth
         token = pyjwt.encode({"sub": "user-1"}, "secret", algorithm="HS384")
 
         auth = JWTAuth(secret="secret", algorithms=["HS256"])
@@ -220,10 +220,10 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_missing_prefix_fails(self) -> None:
         pytest.importorskip("jwt")
-        from yomai.auth.jwt import JWTAuth
-        from yomai._types import Request
-
         import jwt as pyjwt
+
+        from yomai._types import Request
+        from yomai.auth.jwt import JWTAuth
         token = pyjwt.encode({"sub": "user-1"}, "secret", algorithm="HS256")
 
         auth = JWTAuth(secret="secret")
@@ -409,9 +409,9 @@ class TestSignedSessionMiddleware:
 
     @pytest.mark.asyncio
     async def test_middleware_strips_signature_from_header(self) -> None:
-        from yomai.middleware.signed_session import SignedSessionMiddleware
-        from starlette.requests import Request as StarletteRequest
         from starlette.responses import Response
+
+        from yomai.middleware.signed_session import SignedSessionMiddleware
 
         mw = SignedSessionMiddleware(app=None, secret="test-secret")  # type: ignore[arg-type]
         signed = mw.sign("session-xyz")
@@ -429,7 +429,7 @@ class TestSignedSessionMiddleware:
 
         async def dummy_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
             # After middleware, the header should be the raw session_id, not the signed version
-            headers = dict(scope["headers"])
+            dict(scope["headers"])
             x_session = next(
                 (v for k, v in scope["headers"] if k.decode().lower() == "x-session-id"),
                 b"",
@@ -440,7 +440,7 @@ class TestSignedSessionMiddleware:
 
         mw.app = dummy_app
 
-        from starlette.types import ASGIApp, Message, Receive, Scope, Send
+        from starlette.types import Message
         async def send_dummy(message: Message) -> None:
             pass
 
@@ -565,7 +565,6 @@ class TestBuiltinEndpoints:
 
     @pytest.mark.asyncio
     async def test_playground_disabled_in_production(self) -> None:
-        import os
         from yomai import Yomai
 
         app = Yomai(llm=LLMConfig(api_key=""), memory=MemoryConfig(backend="dict"))

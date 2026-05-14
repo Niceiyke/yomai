@@ -357,7 +357,8 @@ def prompt(
 ) -> None:
     """Manage prompt templates."""
     from pathlib import Path
-    from yomai.prompts import PromptStore, PromptSpec
+
+    from yomai.prompts import PromptSpec, PromptStore
 
     if action in ("list", "ls"):
         store = PromptStore(prompts_dir)
@@ -392,7 +393,7 @@ def prompt(
             typer.echo(f"Valid: {spec.name} v{spec.version} ({len(spec.variables)} vars)")
         except Exception as exc:
             typer.echo(f"Invalid: {exc}", err=True)
-            raise typer.Exit(1)
+            raise typer.Exit(1) from exc
 
     elif action == "render":
         if not file and not name:
@@ -439,7 +440,7 @@ def evaluate(
     mod = importlib.import_module(module_name)
     yomai_app: Any = getattr(mod, attr)
 
-    from yomai.eval import EvalRunner, load_dataset, format_terminal, format_json, format_html
+    from yomai.eval import EvalRunner, format_html, format_json, format_terminal, load_dataset
     from yomai.testing.client import YomaiTestClient
 
     dataset = load_dataset(dataset_path)
