@@ -14,6 +14,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.responses import JSONResponse, Response, StreamingResponse
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from yomai import env
 from yomai._types import Request, read_json_body
@@ -34,6 +35,7 @@ from yomai.workflow.runner import WorkflowRunner
 def _format_validation_error(exc: Exception) -> dict[str, str]:
     """Produce a user-friendly error dict from a Pydantic ValidationError."""
     from pydantic import ValidationError
+
     if isinstance(exc, ValidationError):
         messages: list[str] = []
         for err in exc.errors():
@@ -41,6 +43,7 @@ def _format_validation_error(exc: Exception) -> dict[str, str]:
             messages.append(f"{loc}: {err['msg']}")
         return {"error": "; ".join(messages)}
     return {"error": str(exc)}
+
 
 # Reusable type adapters for common types
 _UUID_ADAPTER = TypeAdapter(UUID)
@@ -98,7 +101,10 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
             if not isinstance(value, dict):
                 raise ValueError(f"Invalid field {name}: expected dict, got {type(value).__name__}")
             key_type, val_type = args
-            return {_coerce_value(k, key_type, f"{name}[key]"): _coerce_value(v, val_type, f"{name}[{k}]") for k, v in value.items()}
+            return {
+                _coerce_value(k, key_type, f"{name}[key]"): _coerce_value(v, val_type, f"{name}[{k}]")
+                for k, v in value.items()
+            }
         # Union types (including Optional)
         if origin is Union and args:
             # Try each union member
@@ -129,7 +135,9 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
                 return annotation(value)
             return annotation(value)
         # datetime
-        if annotation is datetime.datetime or (inspect.isclass(annotation) and issubclass(annotation, datetime.datetime)):
+        if annotation is datetime.datetime or (
+            inspect.isclass(annotation) and issubclass(annotation, datetime.datetime)
+        ):
             return _DATETIME_ADAPTER.validate_python(value)
         # Literal
         literals = getattr(annotation, "__values__", None)
@@ -142,7 +150,9 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
             try:
                 return TypeAdapter(annotation).validate_python(value)
             except ValidationError:
-                raise ValueError(f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}") from None
+                raise ValueError(
+                    f"Invalid field {name}: {value!r} is not valid for type {annotation.__name__}"
+                ) from None
         raise ValueError(f"Unsupported field type for {name}: {annotation.__name__}")
 
     return value
@@ -261,10 +271,16 @@ class AgentRoute(BaseRoute):
                     user_message = pattern.sub("[filtered]", user_message)
 
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
-                agent_loop = AgentLoop(self.provider_factory(), self.tools, self.agent_config, self.llm_config,
-                    budget_tracker=getattr(self, '_budget_tracker', None), session_id=session_id,
-                    hooks=getattr(self, '_hooks', None),
-                    tool_cache=getattr(self, '_tool_cache', None))
+                agent_loop = AgentLoop(
+                    self.provider_factory(),
+                    self.tools,
+                    self.agent_config,
+                    self.llm_config,
+                    budget_tracker=getattr(self, "_budget_tracker", None),
+                    session_id=session_id,
+                    hooks=getattr(self, "_hooks", None),
+                    tool_cache=getattr(self, "_tool_cache", None),
+                )
                 async for sse in agent_loop.run(user_message, history=history, system=system):
                     await put_sse(sse)
 
@@ -284,7 +300,11 @@ class AgentRoute(BaseRoute):
                                 async for sse in agent_loop.run(retry_prompt, history=history, system=system):
                                     await put_sse(sse)
                             else:
-                                await put_sse(sse_error("Failed to produce valid structured output after 3 attempts", "schema_error"))
+                                await put_sse(
+                                    sse_error(
+                                        "Failed to produce valid structured output after 3 attempts", "schema_error"
+                                    )
+                                )
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -297,8 +317,8 @@ class AgentRoute(BaseRoute):
 
         async def generate() -> AsyncIterator[str]:
             agent_task = asyncio.create_task(run_agent())
-            _stream_tasks = getattr(self, '_stream_tasks', None)
-            _stream_tasks_lock = getattr(self, '_stream_tasks_lock', None)
+            _stream_tasks = getattr(self, "_stream_tasks", None)
+            _stream_tasks_lock = getattr(self, "_stream_tasks_lock", None)
             if _stream_tasks is not None and _stream_tasks_lock is not None:
                 async with _stream_tasks_lock:
                     _stream_tasks[session_id] = agent_task
@@ -307,7 +327,7 @@ class AgentRoute(BaseRoute):
             seq = 0
             if self.on_stream_start is not None:
                 self.on_stream_start()
-            hooks = getattr(self, '_hooks', None)
+            hooks = getattr(self, "_hooks", None)
             if hooks is not None:
                 hooks.emit_background("stream.start", session_id=session_id, path=self.path)
             try:
@@ -357,6 +377,7 @@ class AgentRoute(BaseRoute):
         3. Parse entire text as JSON.
         """
         import json as json_lib
+
         decoder = json_lib.JSONDecoder()
 
         fence_pattern = re.compile(r"```(?:json)?\s*\n(.*?)\n\s*```", re.DOTALL)
@@ -378,7 +399,12 @@ class AgentRoute(BaseRoute):
         return model.model_validate(json_lib.loads(text))
 
     def _build_kwargs(
-        self, body: dict[str, Any], message: str, session_id: str, path_kwargs: dict[str, Any], request: Request | None = None
+        self,
+        body: dict[str, Any],
+        message: str,
+        session_id: str,
+        path_kwargs: dict[str, Any],
+        request: Request | None = None,
     ) -> dict[str, Any]:
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
@@ -476,8 +502,8 @@ class WorkflowRoute(BaseRoute):
 
         async def generate() -> AsyncIterator[str]:
             task = asyncio.create_task(run_workflow())
-            _stream_tasks = getattr(self, '_stream_tasks', None)
-            _stream_tasks_lock = getattr(self, '_stream_tasks_lock', None)
+            _stream_tasks = getattr(self, "_stream_tasks", None)
+            _stream_tasks_lock = getattr(self, "_stream_tasks_lock", None)
             if _stream_tasks is not None and _stream_tasks_lock is not None:
                 async with _stream_tasks_lock:
                     _stream_tasks[session_id] = task
@@ -486,7 +512,7 @@ class WorkflowRoute(BaseRoute):
             seq = 0
             if self.on_stream_start is not None:
                 self.on_stream_start()
-            hooks = getattr(self, '_hooks', None)
+            hooks = getattr(self, "_hooks", None)
             if hooks is not None:
                 hooks.emit_background("stream.start", session_id=session_id, path=self.path)
             try:
@@ -528,8 +554,12 @@ class WorkflowRoute(BaseRoute):
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
     def _build_kwargs(
-        self, body: dict[str, Any], runner: WorkflowRunner, path_kwargs: dict[str, Any],
-        request: Request | None = None, session_id: str | None = None,
+        self,
+        body: dict[str, Any],
+        runner: WorkflowRunner,
+        path_kwargs: dict[str, Any],
+        request: Request | None = None,
+        session_id: str | None = None,
     ) -> dict[str, Any]:
         signature = inspect.signature(self.handler)
         kwargs: dict[str, Any] = {}
@@ -571,7 +601,9 @@ class GetRoute(BaseRoute):
                 # Only use header-based session_id if not a path parameter
                 kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in request.query_params:
-                kwargs[name] = _coerce_value(request.query_params[name], _get_annotation(self.handler, name, param), name)
+                kwargs[name] = _coerce_value(
+                    request.query_params[name], _get_annotation(self.handler, name, param), name
+                )
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -609,7 +641,9 @@ class DeleteRoute(BaseRoute):
                 # Use header-based session_id if not a path parameter
                 kwargs[name] = request.headers.get("X-Session-Id", "")
             elif name in request.query_params:
-                kwargs[name] = _coerce_value(request.query_params[name], _get_annotation(self.handler, name, param), name)
+                kwargs[name] = _coerce_value(
+                    request.query_params[name], _get_annotation(self.handler, name, param), name
+                )
             elif param.default is not inspect.Signature.empty:
                 kwargs[name] = param.default
 
@@ -761,7 +795,9 @@ class OptionsRoute(BaseRoute):
             allow_origins = [allow_origins]
         headers: dict[str, str] = {
             "Access-Control-Allow-Methods": ", ".join(self.cors.get("allow_methods", ["GET", "POST", "OPTIONS"])),
-            "Access-Control-Allow-Headers": ", ".join(self.cors.get("allow_headers", ["Content-Type", "Authorization", "X-Session-Id"])),
+            "Access-Control-Allow-Headers": ", ".join(
+                self.cors.get("allow_headers", ["Content-Type", "Authorization", "X-Session-Id"])
+            ),
             "Access-Control-Max-Age": "3600",
         }
         if origin in allow_origins:
@@ -773,3 +809,226 @@ class OptionsRoute(BaseRoute):
         if self.cors.get("allow_credentials"):
             headers["Access-Control-Allow-Credentials"] = "true"
         return Response(status_code=200, headers=headers)
+
+
+class AgentWSRoute(AgentRoute):
+    """WebSocket variant of AgentRoute for bidirectional real-time streaming.
+
+    Uses the same agent loop as SSE but sends events as JSON frames
+    over a WebSocket connection. Supports client-to-server messages
+    for follow-up interactions on the same connection.
+    """
+
+    def __init__(
+        self,
+        path: str,
+        handler: Callable[..., Any],
+        tools: list[ToolFunction] | None,
+        llm_config: LLMConfig,
+        agent_config: AgentConfig,
+        memory: MemoryBackend,
+        provider_factory: ProviderFactory,
+        heartbeat_secs: int = 15,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(
+            path=path,
+            handler=handler,
+            tools=tools,
+            llm_config=llm_config,
+            agent_config=agent_config,
+            memory=memory,
+            provider_factory=provider_factory,
+            heartbeat_secs=heartbeat_secs,
+            **kwargs,
+        )
+
+    async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
+        return await super().handle(request)
+
+    async def handle_ws(self, websocket: WebSocket) -> None:
+        from yomai.streaming.ws import (
+            ws_chunk,
+            ws_done,
+            ws_error,
+            ws_graph_edge,
+            ws_graph_update,
+            ws_graph_upsert,
+            ws_ping,
+            ws_tool_end,
+            ws_tool_progress,
+            ws_tool_start,
+            ws_usage,
+            parse_ws_message,
+        )
+
+        await websocket.accept()
+        session_id = websocket.headers.get("X-Session-Id") or str(uuid.uuid4())
+        await websocket.send_json({"type": "connected", "session_id": session_id})
+
+        self._active: bool = True
+        heartbeat_task = asyncio.create_task(self._ws_heartbeat(websocket))
+
+        try:
+            while self._active:
+                try:
+                    raw = await asyncio.wait_for(websocket.receive_text(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    continue
+
+                msg = parse_ws_message(raw)
+                msg_type = msg.get("type", "message")
+
+                if msg_type == "ping":
+                    await websocket.send_text(ws_ping())
+                    continue
+
+                if msg_type == "stop":
+                    await websocket.send_text(ws_done())
+                    break
+
+                message = msg.get("content", msg.get("message", ""))
+                if not message and isinstance(raw, str):
+                    message = raw
+
+                if not message:
+                    continue
+
+                history = await self.memory.load(session_id)
+                agent_loop = AgentLoop(
+                    self.provider_factory(),
+                    self.tools,
+                    self.agent_config,
+                    self.llm_config,
+                    budget_tracker=getattr(self, "_budget_tracker", None),
+                    session_id=session_id,
+                    hooks=getattr(self, "_hooks", None),
+                    tool_cache=getattr(self, "_tool_cache", None),
+                )
+
+                async for sse_event in agent_loop.run(message, history=history, system=self.system):
+                    await asyncio.sleep(0)
+
+                    try:
+                        parsed = json.loads(
+                            sse_event.removeprefix("event: chunk\ndata: ")
+                            .removeprefix("event: tool_start\ndata: ")
+                            .removesuffix("\n")
+                        )
+                    except json.JSONDecodeError:
+                        try:
+                            lines = sse_event.split("\n")
+                            event_type = ""
+                            data_str = ""
+                            for line in lines:
+                                if line.startswith("event:"):
+                                    event_type = line.removeprefix("event:").strip()
+                                elif line.startswith("data:"):
+                                    data_str = line.removeprefix("data:").strip() + "\n" + data_str
+                            data_str = data_str.strip()
+                            parsed = json.loads(data_str) if data_str else {"type": event_type}
+                        except Exception:
+                            continue
+
+                    ev_type = parsed.get("type", "")
+                    if ev_type == "chunk":
+                        await websocket.send_text(ws_chunk(str(parsed.get("content", ""))))
+                    elif ev_type == "tool_start":
+                        await websocket.send_text(
+                            ws_tool_start(
+                                str(parsed.get("name", "")),
+                                dict(parsed.get("args", {})),
+                                str(parsed.get("id", "")),
+                            )
+                        )
+                    elif ev_type == "tool_end":
+                        await websocket.send_text(
+                            ws_tool_end(
+                                str(parsed.get("id", "")),
+                                str(parsed.get("result", "")),
+                                int(parsed.get("duration_ms", 0)),
+                            )
+                        )
+                    elif ev_type == "tool_progress":
+                        await websocket.send_text(
+                            ws_tool_progress(
+                                str(parsed.get("id", "")),
+                                str(parsed.get("message", "")),
+                            )
+                        )
+                    elif ev_type == "usage":
+                        await websocket.send_text(
+                            ws_usage(
+                                int(parsed.get("input_tokens", 0)),
+                                int(parsed.get("output_tokens", 0)),
+                                float(parsed.get("cost_usd", 0)),
+                            )
+                        )
+                    elif ev_type == "graph":
+                        action = parsed.get("action", "")
+                        if action == "upsert":
+                            await websocket.send_text(
+                                ws_graph_upsert(
+                                    str(parsed.get("id", "")),
+                                    str(parsed.get("label", "")),
+                                    str(parsed.get("kind", "")),
+                                    str(parsed.get("status", "running")),
+                                    parent=parsed.get("parent"),
+                                    meta=parsed.get("meta"),
+                                )
+                            )
+                        elif action == "edge":
+                            await websocket.send_text(
+                                ws_graph_edge(
+                                    str(parsed.get("from", "")),
+                                    str(parsed.get("to", "")),
+                                    str(parsed.get("label", "")),
+                                )
+                            )
+                        elif action == "update":
+                            await websocket.send_text(
+                                ws_graph_update(
+                                    str(parsed.get("id", "")),
+                                    str(parsed.get("status", "")),
+                                    meta=parsed.get("meta"),
+                                )
+                            )
+                    elif ev_type == "error":
+                        await websocket.send_text(
+                            ws_error(
+                                str(parsed.get("message", "")),
+                                str(parsed.get("code", "error")),
+                            )
+                        )
+
+                await websocket.send_text(ws_done())
+                await self.memory.save(session_id, message, agent_loop.last_reply or "")
+
+        except WebSocketDisconnect:
+            pass
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            try:
+                await websocket.send_text(ws_error("Internal server error", "server_error"))
+            except Exception:
+                pass
+        finally:
+            self._active = False
+            heartbeat_task.cancel()
+            try:
+                await websocket.close()
+            except Exception:
+                pass
+
+    async def _ws_heartbeat(self, websocket: WebSocket) -> None:
+        from yomai.streaming.ws import ws_ping
+
+        while getattr(self, "_active", True):
+            await asyncio.sleep(self.heartbeat_secs)
+            if not getattr(self, "_active", True):
+                break
+            try:
+                await websocket.send_text(ws_ping())
+            except Exception:
+                break

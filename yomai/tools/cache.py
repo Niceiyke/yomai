@@ -4,6 +4,7 @@ Keys are built from ``(tool_name, sorted_args_json)``. Expired entries are
 evicted lazily on access. Oldest entries are evicted when the cache exceeds
 ``maxsize``.
 """
+
 from __future__ import annotations
 
 import asyncio

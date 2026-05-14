@@ -10,6 +10,7 @@ import json
 import re
 import signal
 import uuid
+from pathlib import Path
 from collections import Counter
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
@@ -18,12 +19,13 @@ from uuid import UUID
 from pydantic import BaseModel
 from starlette.applications import Starlette
 from starlette.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.routing import Route, WebSocketRoute
 from starlette.status import HTTP_401_UNAUTHORIZED
 
 from yomai import env
 from yomai._types import Request, read_json_body
 from yomai._version import __version__ as _yomai_version
+from yomai.agents.routing import AgentRegistry
 from yomai.auth import AuthBackend, NoAuth
 from yomai.budget import BudgetTracker
 from yomai.config import (
@@ -38,7 +40,7 @@ from yomai.config import (
     StreamingConfig,
 )
 from yomai.core._base_route import resolve_dependency
-from yomai.core.router import AgentRoute, WorkflowRoute
+from yomai.core.router import AgentRoute, AgentWSRoute, WorkflowRoute
 from yomai.devui.playground import get_playground_html
 from yomai.exceptions import YomaiConfigError, YomaiRouteError
 from yomai.hooks import HookHandler, HookRegistry
@@ -56,7 +58,11 @@ from yomai.jobs.interrupts import ResumeRequest
 from yomai.limits import InMemoryRateLimiter, RedisRateLimiter
 from yomai.llm import LLMProvider
 from yomai.llm.anthropic import AnthropicProvider
+from yomai.llm.gemini import GeminiProvider
+from yomai.llm.groq import GroqProvider
+from yomai.llm.mistral import MistralProvider
 from yomai.llm.openai import OpenAIProvider
+from yomai.llm.vllm import VLLMProvider
 from yomai.log import setup as _setup_logging
 from yomai.memory import DictMemory, MemoryBackend, RedisMemory, SqliteMemory
 from yomai.metrics import registry as _metrics_registry
@@ -321,6 +327,7 @@ class Yomai:
         self._workflow_handlers: dict[str, Callable[..., Any]] = {}
         self._active_connections = 0
         self._draining = False
+        self.agents_registry = AgentRegistry()
         self._drained = asyncio.Event()
         self._routes_meta: list[dict[str, Any]] = []
         self._paths: set[str] = set()
@@ -447,6 +454,7 @@ class Yomai:
             if self.config.queue.backend == "swiftq" or self.config.memory.backend == "redis":
                 try:
                     import redis.asyncio as redis_lib
+
                     r = redis_lib.from_url(self.config.queue.url or "redis://localhost:6379/0")
                     await r.ping()  # type: ignore[reportGeneralTypeIssues]
                     await r.aclose()
@@ -502,6 +510,7 @@ class Yomai:
         accept = request.headers.get("Accept", "")
         if "text/plain" in accept and _metrics_registry.available:
             from starlette.responses import PlainTextResponse
+
             return PlainTextResponse(_metrics_registry.get_metrics().decode(), media_type="text/plain; version=0.0.4")
 
         jobs = list(await self.jobs.list())
@@ -547,8 +556,11 @@ class Yomai:
             return JSONResponse({"error": str(exc)}, status_code=400)
 
         ok = await self._interrupt_store.resolve(
-            interrupt_id, req.response,
-            action=req.action, comment=req.comment, resolved_by=req.resolved_by,
+            interrupt_id,
+            req.response,
+            action=req.action,
+            comment=req.comment,
+            resolved_by=req.resolved_by,
         )
         if not ok:
             return JSONResponse({"error": "Interrupt not found or already resolved"}, status_code=404)
@@ -774,6 +786,7 @@ class Yomai:
         exc = task.exception()
         if exc is not None:
             import traceback
+
             traceback.print_exception(type(exc), exc, exc.__traceback__)
 
     def _metadata_auth_error(self, request: Request) -> JSONResponse | None:
@@ -859,7 +872,9 @@ class Yomai:
         path: str,
         tools: list[ToolFunction] | None = None,
         *,
+        transport: str = "sse",
         system: str = "",
+        prompt: str = "",
         api_key: str | None = None,
         tags: list[str] | None = None,
         summary: str | None = None,
@@ -879,6 +894,7 @@ class Yomai:
         Args:
             path: URL path (e.g. ``"/chat"``). May contain ``{param}`` segments.
             tools: List of ``@tool``-decorated functions the agent may call.
+            transport: ``"sse"`` (default) or ``"ws"`` for WebSocket transport.
             system: System prompt prepended to every conversation.
             api_key: Per-route API key override (falls back to dev config).
             tags: OpenAPI tags for documentation grouping.
@@ -897,7 +913,27 @@ class Yomai:
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
             _capture_type_locals(fn)
 
-            route = AgentRoute(
+            resolved_system = system
+            if prompt:
+                from yomai.prompts import PromptStore
+
+                store = PromptStore()
+                spec = store.get(prompt)
+                if spec is None:
+                    spec_path = prompt if prompt.endswith((".yaml", ".yml", ".json")) else f"{prompt}.yaml"
+                    try:
+                        from yomai.prompts import PromptSpec
+
+                        spec = PromptSpec.from_yaml(Path(spec_path))
+                    except Exception:
+                        pass
+                if spec is not None:
+                    resolved_system = spec.render()
+                else:
+                    resolved_system = prompt  # treat as inline template string
+
+            route_cls = AgentWSRoute if transport == "ws" else AgentRoute
+            route = route_cls(
                 path,
                 fn,
                 tools or [],
@@ -910,7 +946,7 @@ class Yomai:
                 self._stream_finished,
                 self._accepting_connections,
                 self.config.dev.log_usage,
-                system,
+                resolved_system,
                 self.config.dev.api_key if api_key is None else api_key,
                 path_params,
                 cors or {},
@@ -924,7 +960,11 @@ class Yomai:
             route._tool_cache = self._tool_cache
             route._stream_tasks = self._stream_tasks
             route._stream_tasks_lock = self._stream_tasks_lock
-            self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
+            if transport == "ws":
+                self._starlette.router.routes.append(WebSocketRoute(path, route.handle_ws))
+            else:
+                self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
+            self._paths.add(path)
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
             tool_schemas = [t.schema for t in (tools or []) if isinstance(getattr(t, "schema", None), dict)]
@@ -949,9 +989,13 @@ class Yomai:
                 }
             )
             fn._yomai_app = self
+            fn._yomai_path = path
             fn._yomai_tools = tools or []
             fn._yomai_agent_config = self.config.agent
-            fn._yomai_agent_system = system
+            fn._yomai_agent_system = resolved_system
+
+            agent_key = path.strip("/").replace("/", "_") or fn.__name__
+            self.agents_registry.register(agent_key, fn)
             return fn
 
         return decorator
@@ -1549,6 +1593,14 @@ class Yomai:
             return AnthropicProvider(self.config.llm)
         if provider in ("openai", "ollama"):
             return OpenAIProvider(self.config.llm)
+        if provider == "gemini":
+            return GeminiProvider(self.config.llm)
+        if provider == "mistral":
+            return MistralProvider(self.config.llm)
+        if provider == "groq":
+            return GroqProvider(self.config.llm)
+        if provider == "vllm":
+            return VLLMProvider(self.config.llm)
         raise YomaiConfigError(f"Unknown provider: {provider!r}")
 
     def _accepting_connections(self) -> bool:

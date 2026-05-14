@@ -6,6 +6,7 @@ Built-in backends:
 
 Custom backends implement the ``AuthBackend`` protocol.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

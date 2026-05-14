@@ -7,7 +7,7 @@ from typing import Any
 
 import typer
 
-from yomai import env
+from yomai import env as yomai_env_module
 from yomai._version import __version__ as _yomai_version
 
 app = typer.Typer(help="Yomai development CLI")
@@ -98,6 +98,7 @@ def calculate(expression: str) -> float:
     return _eval(ast.parse(expression, mode="eval"))
 '''
 
+
 @app.command()
 def new(project_name: str) -> None:
     """Scaffold a new Yomai project."""
@@ -131,11 +132,13 @@ def run(
 
     # Ensure the current directory is on the import path
     import sys
+
     sys.path.insert(0, os.getcwd())
 
     # Auto-load .env if python-dotenv is available
     try:
         from dotenv import load_dotenv
+
         load_dotenv()
     except ImportError:
         pass
@@ -145,7 +148,7 @@ def run(
     routes = getattr(yomai_app, "_routes_meta", [])
 
     typer.echo(f"\n  Yomai v{_yomai_version}  ·  http://localhost:{port}")
-    if env.YOMAI_ENV != "production":
+    if yomai_env_module.YOMAI_ENV != "production":
         typer.echo(f"  Playground  →  http://localhost:{port}/__yomai__")
     typer.echo("\n  Routes")
     for route in routes:
@@ -174,10 +177,12 @@ def worker(
         raise typer.BadParameter("app_path must look like 'module:app'")
 
     import sys
+
     sys.path.insert(0, os.getcwd())
 
     try:
         from dotenv import load_dotenv
+
         load_dotenv()
     except ImportError:
         pass
@@ -211,6 +216,7 @@ def serve(
     # Auto-load .env
     try:
         from dotenv import load_dotenv
+
         load_dotenv()
     except ImportError:
         pass
@@ -239,10 +245,12 @@ def dev(
 ) -> None:
     """Run with reload and playground enabled (alias for 'yomai run --reload')."""
     import sys
+
     sys.path.insert(0, os.getcwd())
 
     try:
         from dotenv import load_dotenv
+
         load_dotenv()
     except ImportError:
         pass
@@ -268,6 +276,7 @@ def dev(
     typer.echo("")
 
     import uvicorn
+
     uvicorn.run(f"{module_name}:{attr}", host=host, port=port, reload=True, log_level="info")
 
 
@@ -332,3 +341,128 @@ def env() -> None:
     ]
     for key, value in attrs:
         typer.echo(f"  {key:.<24s} = {value or '(not set)'}")
+
+
+prompt_app = typer.Typer(help="Manage prompt templates")
+
+
+@app.command()
+def prompt(
+    action: str = typer.Argument("list", help="Action: list, create, validate, render"),
+    name: str | None = typer.Option(None, "--name", "-n", help="Prompt name"),
+    template: str | None = typer.Option(None, "--template", "-t", help="Prompt template content"),
+    file: str | None = typer.Option(None, "--file", "-f", help="Path to prompt file"),
+    variables: str | None = typer.Option(None, "--vars", help="JSON variables for rendering"),
+    prompts_dir: str = typer.Option("prompts", "--dir", "-d", help="Prompts directory"),
+) -> None:
+    """Manage prompt templates."""
+    from pathlib import Path
+    from yomai.prompts import PromptStore, PromptSpec
+
+    if action in ("list", "ls"):
+        store = PromptStore(prompts_dir)
+        specs = store.list_specs()
+        if not specs:
+            typer.echo("No prompts found.")
+            return
+        typer.echo(f"\nPrompts ({len(specs)}):")
+        for s in specs:
+            vars_str = ", ".join(s["variables"]) if s["variables"] else "(none)"
+            typer.echo(f"  {s['name']:.<20s} v{s['version']}  vars: [{vars_str}]")
+            if s["description"]:
+                typer.echo(f"    {s['description']}")
+
+    elif action == "create":
+        if not name or not template:
+            typer.echo("Usage: yomai prompt create --name <name> --template '<content>'", err=True)
+            raise typer.Exit(1)
+        dir_path = Path(prompts_dir)
+        dir_path.mkdir(parents=True, exist_ok=True)
+        out_path = dir_path / f"{name}.yaml"
+        content = f"name: {name}\nversion: 1\ndescription: ''\ntemplate: |\n  {template}\nvariables: {{}}\n"
+        out_path.write_text(content)
+        typer.echo(f"Created {out_path}")
+
+    elif action == "validate":
+        if not file:
+            typer.echo("Usage: yomai prompt validate --file <path>", err=True)
+            raise typer.Exit(1)
+        try:
+            spec = PromptSpec.from_yaml(Path(file))
+            typer.echo(f"Valid: {spec.name} v{spec.version} ({len(spec.variables)} vars)")
+        except Exception as exc:
+            typer.echo(f"Invalid: {exc}", err=True)
+            raise typer.Exit(1)
+
+    elif action == "render":
+        if not file and not name:
+            typer.echo('Usage: yomai prompt render --file <path> [--vars \'{"key": "val"}\']', err=True)
+            raise typer.Exit(1)
+        store = PromptStore(prompts_dir)
+        spec = store.get(name) if name else PromptSpec.from_yaml(Path(file)) if file else None
+        if spec is None:
+            typer.echo("No prompt found.", err=True)
+            raise typer.Exit(1)
+        import json as json_mod
+
+        vars_dict: dict = json_mod.loads(variables) if variables else {}
+        typer.echo(spec.render(**vars_dict))
+
+    else:
+        typer.echo(f"Unknown action: {action}. Use: list, create, validate, render")
+
+
+@app.command()
+def evaluate(
+    dataset_path: str = typer.Argument(..., help="Path to eval dataset file (JSON or YAML)"),
+    app_path: str = typer.Option("main:app", "--app", "-a", help="Module:attribute path to Yomai app"),
+    output: str = typer.Option("terminal", "--output", "-o", help="Output format: terminal, json, html"),
+    output_file: str | None = typer.Option(None, "--output-file", "-f", help="Write report to file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show per-case output during run"),
+) -> None:
+    """Evaluate an agent against a test dataset."""
+    import sys
+
+    sys.path.insert(0, os.getcwd())
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
+    module_name, _, attr = app_path.partition(":")
+    if not module_name or not attr:
+        module_name, attr = app_path, "app"
+
+    mod = importlib.import_module(module_name)
+    yomai_app: Any = getattr(mod, attr)
+
+    from yomai.eval import EvalRunner, load_dataset, format_terminal, format_json, format_html
+    from yomai.testing.client import YomaiTestClient
+
+    dataset = load_dataset(dataset_path)
+    typer.echo(f"\nDataset: {dataset.name}")
+    typer.echo(f"  cases: {len(dataset.cases)}")
+    typer.echo(f"  description: {dataset.description}\n")
+
+    client = YomaiTestClient(yomai_app)
+    runner = EvalRunner(client, dataset, verbose=verbose)
+
+    import asyncio
+
+    metrics = asyncio.run(runner.run())
+
+    if output == "json":
+        report = format_json(metrics)
+    elif output == "html":
+        report = format_html(metrics)
+    else:
+        report = format_terminal(metrics)
+
+    typer.echo(report)
+
+    if output_file:
+        Path(output_file).write_text(report)
+        typer.echo(f"\nReport written to {output_file}")

@@ -20,7 +20,6 @@ def build_openapi(
         description = route.get("description", "")
         deprecated = route.get("deprecated", False)
         path_params = route.get("path_params", [])
-        body_params = route.get("body_params", [])
         params = route.get("params", [])
 
         if route_type == "agent":
@@ -28,7 +27,10 @@ def build_openapi(
             for p in params:
                 pn = p["name"]
                 if pn == "session_id":
-                    body_props["session_id"] = {"type": "string", "description": "Session identifier for memory persistence"}
+                    body_props["session_id"] = {
+                        "type": "string",
+                        "description": "Session identifier for memory persistence",
+                    }
                 elif pn not in path_params:
                     body_props[pn] = _param_schema(p)
 
@@ -37,13 +39,15 @@ def build_openapi(
             for pp in path_params:
                 param_info = next((p for p in params if p["name"] == pp), None)
                 if param_info:
-                    openapi_params.append({
-                        "name": pp,
-                        "in": "path",
-                        "required": True,
-                        "schema": _param_schema(param_info),
-                        "description": f"Path parameter: {pp}",
-                    })
+                    openapi_params.append(
+                        {
+                            "name": pp,
+                            "in": "path",
+                            "required": True,
+                            "schema": _param_schema(param_info),
+                            "description": f"Path parameter: {pp}",
+                        }
+                    )
 
             request_body = {
                 "required": ["message"],
@@ -62,11 +66,7 @@ def build_openapi(
             responses = {
                 "200": {
                     "description": "Server-Sent Event stream",
-                    "content": {
-                        "text/event-stream": {
-                            "schema": {"type": "string", "format": "binary"}
-                        }
-                    },
+                    "content": {"text/event-stream": {"schema": {"type": "string", "format": "binary"}}},
                 },
                 "401": {"description": "Missing or invalid API key"},
                 "503": {"description": "Server shutting down"},
@@ -107,13 +107,15 @@ def build_openapi(
                 pn = p["name"]
                 param_in = p.get("in", "body")
                 if param_in in ("path", "query"):
-                    openapi_params.append({
-                        "name": pn,
-                        "in": param_in,
-                        "required": p.get("required", True),
-                        "schema": _param_schema(p),
-                        "description": f"{'Path' if param_in == 'path' else 'Query'} parameter: {pn}",
-                    })
+                    openapi_params.append(
+                        {
+                            "name": pn,
+                            "in": param_in,
+                            "required": p.get("required", True),
+                            "schema": _param_schema(p),
+                            "description": f"{'Path' if param_in == 'path' else 'Query'} parameter: {pn}",
+                        }
+                    )
 
             responses = {
                 "200": {"description": "Successful response"},
@@ -123,9 +125,7 @@ def build_openapi(
 
             response_schema = route.get("response_model_schema")
             if response_schema:
-                responses["200"]["content"] = {
-                    "application/json": {"schema": response_schema}
-                }
+                responses["200"]["content"] = {"application/json": {"schema": response_schema}}
 
             post_spec = {
                 "summary": summary,
@@ -141,7 +141,9 @@ def build_openapi(
                 body_required: list[str] = []
                 for p in params:
                     pn = p["name"]
-                    if p.get("in") == "body" or (pn not in path_params and pn not in [op["name"] for op in openapi_params]):
+                    if p.get("in") == "body" or (
+                        pn not in path_params and pn not in [op["name"] for op in openapi_params]
+                    ):
                         body_props[pn] = _param_schema(p)
                         if p.get("required", True):
                             body_required.append(pn)
@@ -181,13 +183,15 @@ def build_openapi(
             for pp in path_params:
                 param_info = next((p for p in params if p["name"] == pp), None)
                 if param_info:
-                    openapi_params.append({
-                        "name": pp,
-                        "in": "path",
-                        "required": True,
-                        "schema": _param_schema(param_info),
-                        "description": f"Path parameter: {pp}",
-                    })
+                    openapi_params.append(
+                        {
+                            "name": pp,
+                            "in": "path",
+                            "required": True,
+                            "schema": _param_schema(param_info),
+                            "description": f"Path parameter: {pp}",
+                        }
+                    )
 
             request_body = {
                 "content": {
@@ -205,11 +209,7 @@ def build_openapi(
             responses = {
                 "200": {
                     "description": "Server-Sent Event stream",
-                    "content": {
-                        "text/event-stream": {
-                            "schema": {"type": "string", "format": "binary"}
-                        }
-                    },
+                    "content": {"text/event-stream": {"schema": {"type": "string", "format": "binary"}}},
                 },
                 "401": {"description": "Missing or invalid API key"},
                 "503": {"description": "Server shutting down"},
@@ -279,10 +279,12 @@ def _build_params(params: list[dict[str, Any]], path_params: list[str]) -> list[
     for p in params:
         pn = p["name"]
         param_in = "path" if pn in path_params else "query"
-        openapi_params.append({
-            "name": pn,
-            "in": param_in,
-            "required": p.get("required", True),
-            "schema": _param_schema(p),
-        })
+        openapi_params.append(
+            {
+                "name": pn,
+                "in": param_in,
+                "required": p.get("required", True),
+                "schema": _param_schema(p),
+            }
+        )
     return openapi_params

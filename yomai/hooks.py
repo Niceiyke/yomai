@@ -65,6 +65,7 @@ class HookRegistry:
                 return None
             except Exception:
                 import sys
+
                 exc = sys.exc_info()[1]
                 _log.warning("hook.handler_failed %s", name, extra={"hook_name": name, "handler": hname}, exc_info=True)
                 return {"handler": hname, "error": str(exc)}

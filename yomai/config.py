@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -9,14 +9,12 @@ from yomai.exceptions import YomaiConfigError
 
 
 class LLMConfig(BaseModel):
-    provider: Literal["anthropic", "openai", "ollama"] = "anthropic"
+    provider: Literal["anthropic", "openai", "ollama", "gemini", "mistral", "groq", "vllm"] = "anthropic"
     model: str = "claude-sonnet-4-20250514"
     api_key: str = ""
     base_url: str | None = None
     max_tokens: int = 1024
-    cost_per_token: dict[str, float] = Field(
-        default_factory=lambda: {"input": 0.000003, "output": 0.000015}
-    )
+    cost_per_token: dict[str, float] = Field(default_factory=lambda: {"input": 0.000003, "output": 0.000015})
     strip_reasoning: bool = False
     max_retries: int = 3
     retry_backoff_secs: float = 1.0
@@ -37,6 +35,36 @@ class LLMConfig(BaseModel):
                 self.model = "llama3.2"
             if self.base_url is None:
                 self.base_url = getattr(env, "OLLAMA_BASE_URL", None) or "http://localhost:11434/v1"
+        if self.provider == "gemini":
+            env_key = "GEMINI_API_KEY"
+            if not self.api_key:
+                self.api_key = getattr(env, env_key, "")
+            if self.model == "claude-sonnet-4-20250514":
+                self.model = "gemini-2.0-flash"
+        if self.provider == "mistral":
+            env_key = "MISTRAL_API_KEY"
+            if not self.api_key:
+                self.api_key = getattr(env, env_key, "")
+            if self.model == "claude-sonnet-4-20250514":
+                self.model = "mistral-large-latest"
+            if self.base_url is None:
+                self.base_url = getattr(env, "MISTRAL_BASE_URL", None)
+        if self.provider == "groq":
+            env_key = "GROQ_API_KEY"
+            if not self.api_key:
+                self.api_key = getattr(env, env_key, "")
+            if self.model == "claude-sonnet-4-20250514":
+                self.model = "llama-3.3-70b-versatile"
+            if self.base_url is None:
+                self.base_url = getattr(env, "GROQ_BASE_URL", None) or "https://api.groq.com/openai/v1"
+        if self.provider == "vllm":
+            env_key = "VLLM_API_KEY"
+            if not self.api_key:
+                self.api_key = getattr(env, env_key, "")
+            if self.model == "claude-sonnet-4-20250514":
+                self.model = "meta-llama/Meta-Llama-3-8B-Instruct"
+            if self.base_url is None:
+                self.base_url = getattr(env, "VLLM_BASE_URL", None) or "http://localhost:8000/v1"
         return self
 
 
@@ -85,6 +113,7 @@ class AgentConfig(BaseModel):
     def warn_deprecated_max_tool_calls(cls, data: Any) -> Any:
         if isinstance(data, dict) and "max_tool_calls" in data:
             import warnings
+
             warnings.warn(
                 "`max_tool_calls` is deprecated, use `max_iterations` instead.",
                 DeprecationWarning,

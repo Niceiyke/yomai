@@ -13,6 +13,8 @@ Quick start::
     @app.agent("/chat", tools=[get_weather])
     async def chat(message: str) -> None: ...
 """
+
+from yomai.agents.routing import AgentCallError, AgentRegistry, agent_tool
 from yomai.core.app import Depends, RouteGroup, Yomai
 from yomai.hooks import HookEvent
 from yomai.plugins import PluginSetup, plugin
@@ -41,6 +43,9 @@ __all__ = [
     "Depends",
     "RouteGroup",
     "HookEvent",
+    "AgentRegistry",
+    "agent_tool",
+    "AgentCallError",
     # SSE utilities
     "format_sse",
     "sse_chunk",

@@ -150,7 +150,9 @@ class WorkflowRunner:
                     duration_ms=duration_ms,
                 )
             )
-        await self.sse_queue.put(sse_graph_update(step_id, "done", meta={"duration_ms": duration_ms, "retries_used": retries}))
+        await self.sse_queue.put(
+            sse_graph_update(step_id, "done", meta={"duration_ms": duration_ms, "retries_used": retries})
+        )
         await self.sse_queue.put(sse_step_done(name, duration_ms))
         return self.state[name]
 
@@ -213,9 +215,7 @@ class WorkflowRunner:
             coro = on_false()
             result = await coro
 
-        await self.sse_queue.put(
-            sse_graph_update(branch_id, "done", meta={"taken": "true" if taken else "false"})
-        )
+        await self.sse_queue.put(sse_graph_update(branch_id, "done", meta={"taken": "true" if taken else "false"}))
         return result
 
     # ------------------------------------------------------------------
@@ -246,8 +246,9 @@ class WorkflowRunner:
                 duration_ms = int((time.monotonic() - start) * 1000)
                 result_str = str(cached)
                 await self.sse_queue.put(
-                    sse_graph_update(tool_id, "done",
-                        meta={"result": result_str[:200], "duration_ms": duration_ms, "cached": True})
+                    sse_graph_update(
+                        tool_id, "done", meta={"result": result_str[:200], "duration_ms": duration_ms, "cached": True}
+                    )
                 )
                 return cached
 
@@ -344,8 +345,9 @@ class WorkflowRunner:
     async def _emit_checkpoint(self, name: str, result_preview: str) -> None:
         ckpt_id = f"checkpoint_{name}"
         await self.sse_queue.put(
-            sse_graph_upsert(ckpt_id, f"checkpoint: {name}", "checkpoint", "done",
-                meta={"result": result_preview[:100]})
+            sse_graph_upsert(
+                ckpt_id, f"checkpoint: {name}", "checkpoint", "done", meta={"result": result_preview[:100]}
+            )
         )
         await self.sse_queue.put(sse_graph_edge(self._prev_graph_node or f"step_{name}", ckpt_id, "replay"))
 
@@ -475,8 +477,13 @@ class WorkflowRunner:
         system = getattr(agent_fn, "_yomai_agent_system", "") or ""
         history = await self.memory.load(self.session_id)
         loop = AgentLoop(
-            self.app._build_provider(), tools, self.app.config.agent, self.app.config.llm,
-            budget_tracker=self.app.budget, session_id=self.session_id, hooks=self.app.hooks,
+            self.app._build_provider(),
+            tools,
+            self.app.config.agent,
+            self.app.config.llm,
+            budget_tracker=self.app.budget,
+            session_id=self.session_id,
+            hooks=self.app.hooks,
             tool_cache=self.app._tool_cache,
         )
         async for sse in loop.run(input, history=history, system=system):

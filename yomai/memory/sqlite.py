@@ -81,8 +81,8 @@ class SqliteMemory(MemoryBackend):
             return history
         first = history[0]
         if first.get("role") == "system" and self._max > 1:
-            return [first, *history[-(self._max - 1):]]
-        return history[-self._max:]
+            return [first, *history[-(self._max - 1) :]]
+        return history[-self._max :]
 
     async def _load_sync(self, session_id: str) -> list[Message]:
         loop = asyncio.get_running_loop()

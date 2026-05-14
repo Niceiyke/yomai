@@ -3,6 +3,7 @@
 Tracks cumulative token usage and estimated cost per session. Configured via
 ``BudgetConfig`` in the Yomai app.
 """
+
 from __future__ import annotations
 
 import asyncio

@@ -1,4 +1,5 @@
 """Retry logic for LLM provider calls."""
+
 from __future__ import annotations
 
 import asyncio
@@ -60,10 +61,13 @@ async def retry_with_backoff(
             last_exc = exc
             if not _is_transient(exc) or attempt >= max_retries:
                 raise
-            delay = backoff_secs * (multiplier ** attempt)
+            delay = backoff_secs * (multiplier**attempt)
             logger.warning(
                 "LLM call attempt %d/%d failed (%s), retrying in %.1fs",
-                attempt + 1, max_retries + 1, exc.__class__.__name__, delay,
+                attempt + 1,
+                max_retries + 1,
+                exc.__class__.__name__,
+                delay,
             )
             await asyncio.sleep(delay)
 

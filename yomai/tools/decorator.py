@@ -4,9 +4,8 @@ import inspect
 from collections.abc import Callable
 from typing import Any, Literal, TypeVar, get_args, get_origin, get_type_hints, overload
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pydantic.fields import FieldInfo
-from typing_extensions import get_origin as _get_origin_safe
 
 from yomai.tools.registry import ToolSchema
 
@@ -83,7 +82,12 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
                 schema["items"] = item_schema
             return schema
         prefix_items = [_json_schema_for_annotation(a) for a in args]
-        return {"type": "array", "prefixItems": prefix_items, "minItems": len(prefix_items), "maxItems": len(prefix_items)}
+        return {
+            "type": "array",
+            "prefixItems": prefix_items,
+            "minItems": len(prefix_items),
+            "maxItems": len(prefix_items),
+        }
 
     if origin is dict or annotation is dict:
         return {"type": "object"}
@@ -96,6 +100,7 @@ def _json_schema_for_annotation(annotation: Any) -> ToolSchema:
     if inspect.isclass(annotation):
         import datetime
         from uuid import UUID
+
         if issubclass(annotation, BaseModel):
             return annotation.model_json_schema()
         if issubclass(annotation, (datetime.datetime, datetime.date)):
@@ -138,10 +143,14 @@ def tool(fn: F, *, cache_ttl: int | None = None, timeout_secs: int | None = None
 
 
 @overload
-def tool(fn: None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0) -> Callable[[F], F]: ...
+def tool(
+    fn: None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0
+) -> Callable[[F], F]: ...
 
 
-def tool(fn: F | None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0) -> F | Callable[[F], F]:
+def tool(
+    fn: F | None = None, *, cache_ttl: int | None = None, timeout_secs: int | None = None, max_retries: int = 0
+) -> F | Callable[[F], F]:
     """Mark a sync or async Python function as LLM-callable while preserving its type.
 
     Args:

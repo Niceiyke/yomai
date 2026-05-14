@@ -6,7 +6,11 @@ from typing import Any, TypeAlias
 
 from yomai.llm.anthropic import AnthropicProvider
 from yomai.llm.base import Done, LLMEvent, Message, TextChunk, ToolCall, ToolSchema
+from yomai.llm.gemini import GeminiProvider
+from yomai.llm.groq import GroqProvider
+from yomai.llm.mistral import MistralProvider
 from yomai.llm.openai import OpenAIProvider
+from yomai.llm.vllm import VLLMProvider
 
 
 @dataclass(slots=True)
@@ -64,6 +68,14 @@ def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None):
     original_anthropic_stream = AnthropicProvider.stream
     original_openai_init = OpenAIProvider.__init__
     original_openai_stream = OpenAIProvider.stream
+    original_gemini_init = GeminiProvider.__init__
+    original_gemini_stream = GeminiProvider.stream
+    original_mistral_init = MistralProvider.__init__
+    original_mistral_stream = MistralProvider.stream
+    original_groq_init = GroqProvider.__init__
+    original_groq_stream = GroqProvider.stream
+    original_vllm_init = VLLMProvider.__init__
+    original_vllm_stream = VLLMProvider.stream
 
     def fake_init(self: Any, config: Any) -> None:
         self.model = getattr(config, "model", "mock")
@@ -85,13 +97,23 @@ def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None):
         input_tokens = sum(len(str(message.get("content", "")).split()) for message in messages)
         output_tokens = sum(len(item.split()) for item in turn if isinstance(item, str))
 
-        items: list[MockResponseItem | Done] = list(turn) + [Done(input_tokens=input_tokens, output_tokens=output_tokens)]
+        items: list[MockResponseItem | Done] = list(turn) + [
+            Done(input_tokens=input_tokens, output_tokens=output_tokens)
+        ]
         return _MockStream(items)
 
     AnthropicProvider.__init__ = fake_init  # type: ignore[method-assign]
     AnthropicProvider.stream = fake_stream  # type: ignore[method-assign]
     OpenAIProvider.__init__ = fake_init  # type: ignore[method-assign]
     OpenAIProvider.stream = fake_stream  # type: ignore[method-assign]
+    GeminiProvider.__init__ = fake_init  # type: ignore[method-assign]
+    GeminiProvider.stream = fake_stream  # type: ignore[method-assign]
+    MistralProvider.__init__ = fake_init  # type: ignore[method-assign]
+    MistralProvider.stream = fake_stream  # type: ignore[method-assign]
+    GroqProvider.__init__ = fake_init  # type: ignore[method-assign]
+    GroqProvider.stream = fake_stream  # type: ignore[method-assign]
+    VLLMProvider.__init__ = fake_init  # type: ignore[method-assign]
+    VLLMProvider.stream = fake_stream  # type: ignore[method-assign]
     try:
         yield
     finally:
@@ -99,3 +121,11 @@ def mock_llm(responses: list[MockResponseItem | MockTurn] | None = None):
         AnthropicProvider.stream = original_anthropic_stream  # type: ignore[method-assign]
         OpenAIProvider.__init__ = original_openai_init  # type: ignore[method-assign]
         OpenAIProvider.stream = original_openai_stream  # type: ignore[method-assign]
+        GeminiProvider.__init__ = original_gemini_init  # type: ignore[method-assign]
+        GeminiProvider.stream = original_gemini_stream  # type: ignore[method-assign]
+        MistralProvider.__init__ = original_mistral_init  # type: ignore[method-assign]
+        MistralProvider.stream = original_mistral_stream  # type: ignore[method-assign]
+        GroqProvider.__init__ = original_groq_init  # type: ignore[method-assign]
+        GroqProvider.stream = original_groq_stream  # type: ignore[method-assign]
+        VLLMProvider.__init__ = original_vllm_init  # type: ignore[method-assign]
+        VLLMProvider.stream = original_vllm_stream  # type: ignore[method-assign]

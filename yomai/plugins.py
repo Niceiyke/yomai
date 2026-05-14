@@ -26,6 +26,7 @@ or with the ``@yomai.plugin`` decorator for discovery::
     @plugin
     def setup(app): ...
 """
+
 from __future__ import annotations
 
 import importlib

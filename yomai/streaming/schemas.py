@@ -5,6 +5,7 @@ field-level type safety when building event payloads. Each event type is a
 separate model; the SSE event name (wire-level ``event:`` field) serves as
 the discriminator.
 """
+
 from __future__ import annotations
 
 from typing import Any, Literal
@@ -14,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 # Agent events
 # ---------------------------------------------------------------------------
+
 
 class ChunkData(BaseModel):
     type: Literal["chunk"] = "chunk"
@@ -55,6 +57,7 @@ class ErrorData(BaseModel):
 # Workflow events
 # ---------------------------------------------------------------------------
 
+
 class StepStartData(BaseModel):
     type: Literal["step_start"] = "step_start"
     name: str
@@ -77,6 +80,7 @@ class ResultData(BaseModel):
 # Infrastructure events
 # ---------------------------------------------------------------------------
 
+
 class PingData(BaseModel):
     type: Literal["ping"] = "ping"
 
@@ -96,6 +100,7 @@ class ToolProgressData(BaseModel):
 # ---------------------------------------------------------------------------
 # Graph events (action-discriminated, event: graph)
 # ---------------------------------------------------------------------------
+
 
 class GraphUpsertData(BaseModel):
     action: Literal["upsert"] = "upsert"

@@ -64,9 +64,13 @@ class StreamLog:
                 tool.result = str(data.get("result", ""))
                 tool.duration_ms = int(data.get("duration_ms", 0) or 0)
         elif event_type == "step_start":
-            self.steps.append({"name": data.get("name", "step"), "index": data.get("index"), "started_at": time.monotonic()})
+            self.steps.append(
+                {"name": data.get("name", "step"), "index": data.get("index"), "started_at": time.monotonic()}
+            )
         elif event_type == "step_done":
-            self.steps.append({"name": data.get("name", "step"), "duration_ms": data.get("duration_ms", 0), "done": True})
+            self.steps.append(
+                {"name": data.get("name", "step"), "duration_ms": data.get("duration_ms", 0), "done": True}
+            )
         elif event_type == "usage":
             self.input_tokens = int(data.get("input_tokens", 0) or 0)
             self.output_tokens = int(data.get("output_tokens", 0) or 0)
@@ -77,17 +81,21 @@ class StreamLog:
     def emit(self) -> None:
         elapsed = time.monotonic() - self.started_at
         tool_calls = [
-            {"name": t.name, "args": t.args, "result": (t.result[:200] if len(t.result) > 200 else t.result),
-             "duration_ms": t.duration_ms}
+            {
+                "name": t.name,
+                "args": t.args,
+                "result": (t.result[:200] if len(t.result) > 200 else t.result),
+                "duration_ms": t.duration_ms,
+            }
             for t in self.tools.values()
         ]
         workflow_steps = [
-            {"name": s["name"], "duration_ms": s.get("duration_ms", 0)}
-            for s in self.steps if s.get("done")
+            {"name": s["name"], "duration_ms": s.get("duration_ms", 0)} for s in self.steps if s.get("done")
         ]
         _log.info(
             "%s %s",
-            self.method, self.path,
+            self.method,
+            self.path,
             extra=_extra(
                 route=self.path,
                 session_id=self.session_id,
@@ -114,7 +122,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         if self.enabled and request.method != "POST" and not request.url.path.startswith("/__yomai__"):
             _log.info(
-                "%s %s", request.method, request.url.path,
+                "%s %s",
+                request.method,
+                request.url.path,
                 extra=_extra(method=request.method, route=request.url.path, status_code=response.status_code),
             )
         return response

@@ -16,6 +16,7 @@ Example:
     chunk_event = sse_chunk("Hello")
     done_event = sse_done()
 """
+
 from __future__ import annotations
 
 from typing import Any

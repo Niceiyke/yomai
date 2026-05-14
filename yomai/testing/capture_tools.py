@@ -7,7 +7,6 @@ from typing import Any
 
 from yomai.core.agent import AgentLoop
 from yomai.streaming.sse import sse_tool_end
-from yomai.tools.registry import ToolFunction
 
 
 @dataclass(slots=True)

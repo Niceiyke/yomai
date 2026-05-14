@@ -8,7 +8,18 @@ from typing import Any
 from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
 from yomai.llm._retry import _is_transient
-from yomai.llm.base import Done, LLMEvent, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
+from yomai.llm.base import (
+    Done,
+    LLMEvent,
+    LLMProvider,
+    Message,
+    TextChunk,
+    ToolCall,
+    ToolSchema,
+    _normalize_audio_block,
+    _normalize_document_block,
+    _normalize_image_for_anthropic,
+)
 from yomai.tools.registry import ToolFunction, get_schemas_for_anthropic
 
 
@@ -17,7 +28,9 @@ class AnthropicProvider(LLMProvider):
         try:
             import anthropic
         except ImportError as exc:
-            raise YomaiLLMError("Anthropic SDK is not installed.", hint="Install yomai with anthropic support.") from exc
+            raise YomaiLLMError(
+                "Anthropic SDK is not installed.", hint="Install yomai with anthropic support."
+            ) from exc
 
         if not config.api_key:
             raise YomaiLLMError(
@@ -37,13 +50,30 @@ class AnthropicProvider(LLMProvider):
     def tool_schemas(self, tools: list[ToolFunction]) -> list[ToolSchema]:
         return get_schemas_for_anthropic(tools)
 
+    def _normalize_message_content(self, content: Any) -> Any:
+        if not isinstance(content, list):
+            return content
+        normalized: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                normalized.append(block)
+                continue
+            bt = block.get("type", "")
+            if bt in ("image", "image_url"):
+                normalized.append(_normalize_image_for_anthropic(block))
+            elif bt in ("document", "document_url"):
+                normalized.append(_normalize_document_block(block))
+            elif bt == "input_audio":
+                normalized.append(_normalize_audio_block(block))
+            else:
+                normalized.append(block)
+        return normalized
+
     def tool_result_messages(self, tool_call: ToolCall, result: str) -> list[Message]:
         return [
             {
                 "role": "assistant",
-                "content": [
-                    {"type": "tool_use", "id": tool_call.id, "name": tool_call.name, "input": tool_call.args}
-                ],
+                "content": [{"type": "tool_use", "id": tool_call.id, "name": tool_call.name, "input": tool_call.args}],
             },
             {
                 "role": "user",
@@ -52,10 +82,11 @@ class AnthropicProvider(LLMProvider):
         ]
 
     async def stream(self, messages: list[Message], tools: list[ToolSchema], system: str) -> AsyncIterator[LLMEvent]:
+        normalized = self._normalize_messages(messages)
         kwargs: dict[str, Any] = {
             "model": self.model,
             "max_tokens": self.max_tokens,
-            "messages": messages,
+            "messages": normalized,
         }
         if system:
             kwargs["system"] = system
@@ -134,7 +165,7 @@ class AnthropicProvider(LLMProvider):
                 last_exc = exc
 
             if attempt < max_retries:
-                delay = backoff * (multiplier ** attempt)
+                delay = backoff * (multiplier**attempt)
                 await asyncio.sleep(delay)
 
         if last_exc is not None:

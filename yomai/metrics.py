@@ -6,6 +6,7 @@ Enable by adding ``prometheus-client`` to your environment. The metrics endpoint
 at ``/__yomai__/metrics`` returns Prometheus text format when the library is
 available, falling back to JSON.
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -15,20 +16,33 @@ __all__ = ["MetricsRegistry", "registry"]
 _PROMETHEUS_AVAILABLE = False
 try:
     from prometheus_client import Counter, Gauge, Histogram, generate_latest  # type: ignore[import-not-found]
+
     _PROMETHEUS_AVAILABLE = True
 except ImportError:
     # Stub types for when prometheus-client is not installed
     class _StubMetric:
-        def __init__(self, *args: Any, **kwargs: Any) -> None: pass
-        def labels(self, **_: Any) -> _StubMetric: return self
-        def inc(self, _amount: float = 1) -> None: pass
-        def observe(self, _amount: float) -> None: pass
-        def set(self, _value: float) -> None: pass
-        def dec(self, _amount: float = 1) -> None: pass
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            pass
+
+        def labels(self, **_: Any) -> _StubMetric:
+            return self
+
+        def inc(self, _amount: float = 1) -> None:
+            pass
+
+        def observe(self, _amount: float) -> None:
+            pass
+
+        def set(self, _value: float) -> None:
+            pass
+
+        def dec(self, _amount: float = 1) -> None:
+            pass
 
     Counter = _StubMetric  # type: ignore[misc,assignment]
     Gauge = _StubMetric  # type: ignore[misc,assignment]
     Histogram = _StubMetric  # type: ignore[misc,assignment]
+
     def generate_latest():
         return b""  # type: ignore[assignment]
 
@@ -40,12 +54,12 @@ class MetricsRegistry:
         self.prefix = prefix
 
         # Request metrics
-        self.requests_total = Counter(
-            f"{prefix}_requests_total", "Total requests", ["method", "route", "status"]
-        )
+        self.requests_total = Counter(f"{prefix}_requests_total", "Total requests", ["method", "route", "status"])
         self.request_duration_seconds = Histogram(
-            f"{prefix}_request_duration_seconds", "Request duration",
-            ["method", "route"], buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300),
+            f"{prefix}_request_duration_seconds",
+            "Request duration",
+            ["method", "route"],
+            buckets=(0.1, 0.5, 1, 2, 5, 10, 30, 60, 120, 300),
         )
 
         # LLM metrics
@@ -57,12 +71,12 @@ class MetricsRegistry:
         )
 
         # Tool metrics
-        self.tool_calls_total = Counter(
-            f"{prefix}_tool_calls_total", "Tool invocations", ["tool_name", "status"]
-        )
+        self.tool_calls_total = Counter(f"{prefix}_tool_calls_total", "Tool invocations", ["tool_name", "status"])
         self.tool_duration_seconds = Histogram(
-            f"{prefix}_tool_duration_seconds", "Tool execution duration",
-            ["tool_name"], buckets=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30),
+            f"{prefix}_tool_duration_seconds",
+            "Tool execution duration",
+            ["tool_name"],
+            buckets=(0.01, 0.05, 0.1, 0.5, 1, 5, 10, 30),
         )
 
         # Connection / job gauges

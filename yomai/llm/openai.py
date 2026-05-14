@@ -8,7 +8,18 @@ from typing import Any
 from yomai.config import LLMConfig
 from yomai.exceptions import YomaiLLMError
 from yomai.llm._retry import _is_transient
-from yomai.llm.base import Done, LLMEvent, LLMProvider, Message, TextChunk, ToolCall, ToolSchema
+from yomai.llm.base import (
+    Done,
+    LLMEvent,
+    LLMProvider,
+    Message,
+    TextChunk,
+    ToolCall,
+    ToolSchema,
+    _normalize_audio_block,
+    _normalize_document_block,
+    _normalize_image_for_openai,
+)
 from yomai.tools.registry import ToolFunction, get_schemas_for_openai
 
 
@@ -36,6 +47,25 @@ class OpenAIProvider(LLMProvider):
     def tool_schemas(self, tools: list[ToolFunction]) -> list[ToolSchema]:
         return get_schemas_for_openai(tools)
 
+    def _normalize_message_content(self, content: Any) -> Any:
+        if not isinstance(content, list):
+            return content
+        normalized: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                normalized.append(block)
+                continue
+            bt = block.get("type", "")
+            if bt == "image":
+                normalized.append(_normalize_image_for_openai(block))
+            elif bt in ("document", "document_url"):
+                normalized.append(_normalize_document_block(block))
+            elif bt == "input_audio":
+                normalized.append(_normalize_audio_block(block))
+            else:
+                normalized.append(block)
+        return normalized
+
     def tool_result_messages(self, tool_call: ToolCall, result: str) -> list[Message]:
         return [
             {
@@ -53,7 +83,8 @@ class OpenAIProvider(LLMProvider):
         ]
 
     async def stream(self, messages: list[Message], tools: list[ToolSchema], system: str) -> AsyncIterator[LLMEvent]:
-        openai_messages = list(messages)
+        normalized = self._normalize_messages(messages)
+        openai_messages = list(normalized)
         if system:
             openai_messages = [{"role": "system", "content": system}, *openai_messages]
         kwargs: dict[str, Any] = {
@@ -144,7 +175,7 @@ class OpenAIProvider(LLMProvider):
                 last_exc = exc
 
             if attempt < max_retries:
-                delay = backoff * (multiplier ** attempt)
+                delay = backoff * (multiplier**attempt)
                 await asyncio.sleep(delay)
 
         if last_exc is not None:

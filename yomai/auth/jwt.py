@@ -1,4 +1,5 @@
 """JWT authentication backend (optional — requires PyJWT)."""
+
 from __future__ import annotations
 
 from yomai._types import Request
@@ -49,7 +50,7 @@ class JWTAuth(AuthBackend):
         if not auth_value.startswith(self._prefix):
             return None
 
-        token = auth_value[len(self._prefix):]
+        token = auth_value[len(self._prefix) :]
         try:
             options: dict[str, object] = {"verify_exp": True}
             payload: dict = jwt.decode(  # type: ignore[reportAttributeAccessIssue]

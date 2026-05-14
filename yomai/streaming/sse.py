@@ -97,9 +97,17 @@ def sse_graph_upsert(
     parent: str | None = None,
     meta: dict[str, Any] | None = None,
 ) -> str:
-    return format_sse("graph", GraphUpsertData(
-        id=id, label=label, kind=kind, status=status, parent=parent, meta=meta,
-    ))
+    return format_sse(
+        "graph",
+        GraphUpsertData(
+            id=id,
+            label=label,
+            kind=kind,
+            status=status,
+            parent=parent,
+            meta=meta,
+        ),
+    )
 
 
 def sse_graph_edge(from_id: str, to_id: str, label: str = "") -> str:

@@ -13,6 +13,7 @@ Usage::
 
 Requires: ``pip install opentelemetry-api opentelemetry-sdk``
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -44,6 +45,7 @@ class YomaiTracer:
                 provider = TracerProvider(resource=Resource.create({"service.name": self.service_name}))
                 if self._exporter is not None:
                     from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
                     provider.add_span_processor(BatchSpanProcessor(self._exporter))
                 trace.set_tracer_provider(provider)
                 self._tracer = trace.get_tracer(self.service_name)
@@ -85,8 +87,7 @@ class YomaiTracer:
         async def on_tool_call(event: Any) -> None:
             sid = event.payload.get("session_id", "")
             parent = active.get(sid)
-            span = tracer.start_span(f"tool.{event.payload.get('tool_name', 'unknown')}",
-                                     kind=SPAN_KIND_INTERNAL)
+            span = tracer.start_span(f"tool.{event.payload.get('tool_name', 'unknown')}", kind=SPAN_KIND_INTERNAL)
             span.set_attribute("tool.name", event.payload.get("tool_name", ""))
             span.set_attribute("session_id", sid)
             if parent:

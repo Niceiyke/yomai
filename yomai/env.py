@@ -7,6 +7,7 @@ These are module-level properties that read from ``os.environ`` on every
 access so that tests can override values by modifying ``os.environ``
 directly after import.
 """
+
 from __future__ import annotations
 
 import os

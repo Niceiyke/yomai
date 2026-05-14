@@ -1,19 +1,83 @@
 """Pydantic models for HTTP request/response bodies and route metadata."""
+
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field
+
+
+class TextContent(BaseModel):
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ImageUrlSource(BaseModel):
+    url: str
+    detail: Literal["low", "high", "auto"] = "auto"
+
+
+class ImageUrlContent(BaseModel):
+    type: Literal["image_url"] = "image_url"
+    image_url: ImageUrlSource
+
+
+class ImageBase64Source(BaseModel):
+    media_type: str = "image/png"
+    data: str
+
+
+class ImageBase64Content(BaseModel):
+    type: Literal["image"] = "image"
+    source: ImageBase64Source
+
+
+class AudioInputContent(BaseModel):
+    type: Literal["input_audio"] = "input_audio"
+    input_audio: AudioInputSource
+
+
+class AudioInputSource(BaseModel):
+    data: str
+    format: Literal["wav", "mp3", "flac"] = "wav"
+
+
+class DocumentUrlSource(BaseModel):
+    url: str
+
+
+class DocumentUrlContent(BaseModel):
+    type: Literal["document_url"] = "document_url"
+    document_url: DocumentUrlSource
+
+
+class DocumentBase64Content(BaseModel):
+    type: Literal["document"] = "document"
+    source: dict[str, str]  # {"media_type": "application/pdf", "data": "..."}
+
+
+YomaiContentBlock = Union[
+    TextContent,
+    ImageUrlContent,
+    ImageBase64Content,
+    AudioInputContent,
+    DocumentUrlContent,
+    DocumentBase64Content,
+    dict[str, Any],
+]
+
+YomaiMessage = Union[str, list[YomaiContentBlock]]
 
 
 class AgentRequest(BaseModel):
     """Request body for agent endpoints (``POST`` with SSE streaming).
 
     ``message`` can be a plain string or a content array for multi-modal
-    requests (images, audio)::
+    requests (images, audio, documents)::
 
         {"message": "What is in this image?"}
         {"message": [{"type": "text", "text": "Describe"}, {"type": "image_url", "image_url": {"url": "..."}}]}
+        {"message": [{"type": "text", "text": "Summarize"}, {"type": "document_url", "document_url": {"url": "..."}}]}
 
     Additional fields defined in the handler function signature are accepted
     via ``extra="allow"``.
@@ -30,10 +94,28 @@ class AgentRequest(BaseModel):
         """Extract a plain-text preview for use in hooks, graphs, and memory."""
         if isinstance(self.message, str):
             return self.message
+        text_parts: list[str] = []
         for block in self.message:
-            if isinstance(block, dict) and block.get("type") == "text":
-                return str(block.get("text", ""))
+            if isinstance(block, dict):
+                if block.get("type") == "text":
+                    text_parts.append(str(block.get("text", "")))
+        if text_parts:
+            return " ".join(text_parts)
         return "[multi-modal]"
+
+    @staticmethod
+    def content_block_type(block: dict[str, Any]) -> str:
+        """Return a human-readable label for a content block."""
+        t = block.get("type", "")
+        mapping = {
+            "text": "text",
+            "image_url": "image",
+            "image": "image",
+            "input_audio": "audio",
+            "document_url": "document",
+            "document": "document",
+        }
+        return mapping.get(t, t)
 
 
 # ---------------------------------------------------------------------------

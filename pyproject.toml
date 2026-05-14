@@ -35,6 +35,11 @@ dependencies = [
 queue = ["redis>=5.0"]
 redis = ["redis>=5.0"]
 metrics = ["prometheus-client>=0.21"]
+gemini = ["google-genai>=1.0"]
+mistral = ["mistralai>=1.0"]
+groq = ["openai>=1.0"]
+vllm = ["openai>=1.0"]
+eval = ["pyyaml>=6.0"]
 dev = [
   "python-dotenv>=0.21",
   "pytest>=8",

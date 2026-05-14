@@ -88,5 +88,5 @@ class DictMemory(MemoryBackend):
 
         first = history[0]
         if first.get("role") == "system" and self._max > 1:
-            return [first, *history[-(self._max - 1):]]
-        return history[-self._max:]
+            return [first, *history[-(self._max - 1) :]]
+        return history[-self._max :]

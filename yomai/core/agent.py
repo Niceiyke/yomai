@@ -38,10 +38,12 @@ def _message_text(message: str | list[dict[str, Any]]) -> str:
         if isinstance(block, dict):
             if block.get("type") == "text":
                 parts.append(str(block.get("text", "")))
-            elif block.get("type") == "image_url":
+            elif block.get("type") in ("image_url", "image"):
                 parts.append("[image]")
-            elif block.get("type") == "input_audio":
+            elif block.get("type") in ("input_audio",):
                 parts.append("[audio]")
+            elif block.get("type") in ("document_url", "document"):
+                parts.append("[document]")
     return " ".join(parts) if parts else "[multi-modal]"
 
 
@@ -104,17 +106,19 @@ class AgentLoop:
             provider = cast(ToolSchemaProvider, self.provider)
             return provider.tool_schemas(self.tools)
         from yomai.tools.registry import get_schemas_for_anthropic
+
         return get_schemas_for_anthropic(self.tools)
 
     def _estimate_cost(self, usage: Done) -> float:
         if not self.llm_config:
             return 0.0
-        return (
-            usage.input_tokens * self.llm_config.cost_per_token.get("input", 0.0)
-            + usage.output_tokens * self.llm_config.cost_per_token.get("output", 0.0)
-        )
+        return usage.input_tokens * self.llm_config.cost_per_token.get(
+            "input", 0.0
+        ) + usage.output_tokens * self.llm_config.cost_per_token.get("output", 0.0)
 
-    async def run(self, message: str | list[dict[str, Any]], history: list[Message], system: str = "") -> AsyncGenerator[str, None]:
+    async def run(
+        self, message: str | list[dict[str, Any]], history: list[Message], system: str = ""
+    ) -> AsyncGenerator[str, None]:
         self._inside_reasoning = False
         messages: list[Message] = [*history, {"role": "user", "content": message}]
         tool_schemas = self._tool_schemas()
@@ -127,7 +131,9 @@ class AgentLoop:
         if isinstance(message, str):
             msg_label = message
         else:
-            msg_label = next((b.get("text", "") for b in message if isinstance(b, dict) and b.get("type") == "text"), "[multi-modal]")
+            msg_label = next(
+                (b.get("text", "") for b in message if isinstance(b, dict) and b.get("type") == "text"), "[multi-modal]"
+            )
 
         if self.hooks is not None:
             self.hooks.emit_background("agent.start", session_id=self.session_id, message=msg_label[:200])
@@ -162,8 +168,9 @@ class AgentLoop:
                         if iterations >= self.config.max_iterations:
                             yield sse_error("Maximum iterations reached", "max_iterations_exceeded")
                             if self.hooks is not None:
-                                self.hooks.emit_background("agent.error", session_id=self.session_id,
-                                    error="max_iterations_exceeded")
+                                self.hooks.emit_background(
+                                    "agent.error", session_id=self.session_id, error="max_iterations_exceeded"
+                                )
                             saw_tool_call = False
                             break
                         saw_tool_call = True
@@ -190,14 +197,23 @@ class AgentLoop:
                                 yield sse_usage(usage.input_tokens, usage.output_tokens, self._estimate_cost(usage))
                                 yield sse_done()
                                 if self.hooks is not None:
-                                    self.hooks.emit_background("agent.budget_exceeded", session_id=self.session_id,
+                                    self.hooks.emit_background(
+                                        "agent.budget_exceeded",
+                                        session_id=self.session_id,
                                         reason=result.get("reason", "limit"),
-                                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens)
-                                    self.hooks.emit_background("agent.done", session_id=self.session_id,
-                                        tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                                        tool_calls=tool_count)
-                                    self.hooks.emit_background("request.end", session_id=self.session_id,
-                                        status="budget_exceeded")
+                                        tokens_in=usage.input_tokens,
+                                        tokens_out=usage.output_tokens,
+                                    )
+                                    self.hooks.emit_background(
+                                        "agent.done",
+                                        session_id=self.session_id,
+                                        tokens_in=usage.input_tokens,
+                                        tokens_out=usage.output_tokens,
+                                        tool_calls=tool_count,
+                                    )
+                                    self.hooks.emit_background(
+                                        "request.end", session_id=self.session_id, status="budget_exceeded"
+                                    )
                                 return
 
                 this_in = usage.input_tokens - llm_start_tokens[0]
@@ -208,8 +224,13 @@ class AgentLoop:
                     meta={"tokens_in": usage.input_tokens, "tokens_out": usage.output_tokens},
                 )
                 if self.hooks is not None:
-                    self.hooks.emit_background("agent.llm_call", session_id=self.session_id,
-                        iteration=iterations, tokens_in=this_in, tokens_out=this_out)
+                    self.hooks.emit_background(
+                        "agent.llm_call",
+                        session_id=self.session_id,
+                        iteration=iterations,
+                        tokens_in=this_in,
+                        tokens_out=this_out,
+                    )
 
                 if not saw_tool_call:
                     break
@@ -225,17 +246,24 @@ class AgentLoop:
             yield sse_done()
 
             if self.hooks is not None:
-                self.hooks.emit_background("agent.done", session_id=self.session_id,
-                    tokens_in=usage.input_tokens, tokens_out=usage.output_tokens,
-                    tool_calls=tool_count, iterations=iterations)
+                self.hooks.emit_background(
+                    "agent.done",
+                    session_id=self.session_id,
+                    tokens_in=usage.input_tokens,
+                    tokens_out=usage.output_tokens,
+                    tool_calls=tool_count,
+                    iterations=iterations,
+                )
                 self.hooks.emit_background("request.end", session_id=self.session_id, status="ok")
 
         except Exception as exc:
             if self.hooks is not None:
-                self.hooks.emit_background("agent.error", session_id=self.session_id,
-                    error=str(exc)[:200], error_type=exc.__class__.__name__)
-                self.hooks.emit_background("request.end", session_id=self.session_id,
-                    status="error", error=str(exc)[:200])
+                self.hooks.emit_background(
+                    "agent.error", session_id=self.session_id, error=str(exc)[:200], error_type=exc.__class__.__name__
+                )
+                self.hooks.emit_background(
+                    "request.end", session_id=self.session_id, status="error", error=str(exc)[:200]
+                )
             raise
 
     def _maybe_strip_reasoning(self, text: str) -> str:
@@ -271,8 +299,13 @@ class AgentLoop:
         tool_label = f"{tool_call.name}({args_preview})" if args_preview else tool_call.name
 
         if self.hooks is not None:
-            self.hooks.emit_background("agent.tool_call", session_id=self.session_id,
-                tool_name=tool_call.name, tool_id=tool_call.id, args=tool_call.args)
+            self.hooks.emit_background(
+                "agent.tool_call",
+                session_id=self.session_id,
+                tool_name=tool_call.name,
+                tool_id=tool_call.id,
+                args=tool_call.args,
+            )
 
         yield sse_graph_upsert(tool_id, tool_label[:80], "tool", "running")
         yield sse_graph_edge(parent_llm_id, tool_id, "tool_call")
@@ -291,16 +324,23 @@ class AgentLoop:
                 duration_ms = int((time.monotonic() - start) * 1000)
                 result_str = str(result)
                 yield sse_graph_update(
-                    tool_id, "done",
+                    tool_id,
+                    "done",
                     meta={"result": result_str[:200], "duration_ms": duration_ms, "cached": True},
                 )
                 yield sse_tool_end(tool_call.id, result_str, duration_ms)
                 messages.extend(self._tool_result_messages(tool_call, result_str))
                 self._pending_tool_nodes.append(tool_id)
                 if self.hooks is not None:
-                    self.hooks.emit_background("agent.tool_result", session_id=self.session_id,
-                        tool_name=tool_call.name, tool_id=tool_call.id,
-                        result=result_str[:200], duration_ms=duration_ms, error=False)
+                    self.hooks.emit_background(
+                        "agent.tool_result",
+                        session_id=self.session_id,
+                        tool_name=tool_call.name,
+                        tool_id=tool_call.id,
+                        result=result_str[:200],
+                        duration_ms=duration_ms,
+                        error=False,
+                    )
                 return
 
         if fn is None:
@@ -365,9 +405,15 @@ class AgentLoop:
             await self.tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
 
         if self.hooks is not None:
-            self.hooks.emit_background("agent.tool_result", session_id=self.session_id,
-                tool_name=tool_call.name, tool_id=tool_call.id,
-                result=result_str[:200], duration_ms=duration_ms, error=is_error)
+            self.hooks.emit_background(
+                "agent.tool_result",
+                session_id=self.session_id,
+                tool_name=tool_call.name,
+                tool_id=tool_call.id,
+                result=result_str[:200],
+                duration_ms=duration_ms,
+                error=is_error,
+            )
 
     def _validate_tool_args(self, fn: ToolFunction, args: dict[str, Any]) -> None:
         hints: dict[str, Any] = {}
@@ -428,9 +474,10 @@ class AgentLoop:
                             break
                 else:
                     if non_none:
-                        type_names = ", ".join(
-                            getattr(a, "__name__", str(a)) for a in non_none if isinstance(a, type)
-                        ) or "matching type"
+                        type_names = (
+                            ", ".join(getattr(a, "__name__", str(a)) for a in non_none if isinstance(a, type))
+                            or "matching type"
+                        )
                         raise TypeError(f"Tool argument {name!r} must be one of: {type_names}")
                 continue
 

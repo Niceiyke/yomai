@@ -1,4 +1,5 @@
 """Shared base class for all Yomai route types."""
+
 from __future__ import annotations
 
 import hmac

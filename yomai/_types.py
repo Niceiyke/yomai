@@ -1,4 +1,5 @@
 """Type extensions for external classes used throughout yomai."""
+
 from __future__ import annotations
 
 import json

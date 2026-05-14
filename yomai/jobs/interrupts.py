@@ -17,8 +17,7 @@ class ResumeRequest(BaseModel):
     """Request body for ``POST /__yomai__/interrupts/{id}/resume``."""
 
     response: str = Field(..., min_length=1, description="Human's response to the interrupt")
-    action: str | None = Field(default=None, pattern="^(approve|reject)?$",
-                               description="Structured approval action")
+    action: str | None = Field(default=None, pattern="^(approve|reject)?$", description="Structured approval action")
     comment: str = Field(default="", description="Optional feedback from the reviewer")
     resolved_by: str = Field(default="", description="Identifier of the human resolver")
 
@@ -48,7 +47,7 @@ class Interrupt:
     message: str
     status: str = "pending"  # pending | resolved | timeout
     response: str | None = None
-    action: str | None = None       # "approved" | "rejected" | None (free-text)
+    action: str | None = None  # "approved" | "rejected" | None (free-text)
     comment: str = ""
     resolved_by: str = ""
     created_at: datetime = field(default_factory=_utcnow)
@@ -67,8 +66,9 @@ class Interrupt:
 class InterruptStore(Protocol):
     async def create(self, interrupt: Interrupt) -> None: ...
     async def get(self, interrupt_id: str) -> Interrupt | None: ...
-    async def resolve(self, interrupt_id: str, response: str, *, action: str | None = None,
-                      comment: str = "", resolved_by: str = "") -> bool: ...
+    async def resolve(
+        self, interrupt_id: str, response: str, *, action: str | None = None, comment: str = "", resolved_by: str = ""
+    ) -> bool: ...
     async def delete(self, interrupt_id: str) -> None: ...
 
 
@@ -138,6 +138,7 @@ class RedisInterruptStore:
                 from redis import asyncio as redis_asyncio  # type: ignore[import-not-found]
             except Exception as exc:
                 from yomai.exceptions import YomaiConfigError
+
                 raise YomaiConfigError(
                     "Redis interrupt store requires redis to be installed.",
                     hint="Install Yomai with redis extras.",
@@ -150,8 +151,15 @@ class RedisInterruptStore:
 
     async def create(self, interrupt: Interrupt) -> None:
         key = self._key(interrupt.id)
-        data = json.dumps({"id": interrupt.id, "job_id": interrupt.job_id, "message": interrupt.message,
-                           "status": "pending", "created_at": interrupt.created_at.isoformat()})
+        data = json.dumps(
+            {
+                "id": interrupt.id,
+                "job_id": interrupt.job_id,
+                "message": interrupt.message,
+                "status": "pending",
+                "created_at": interrupt.created_at.isoformat(),
+            }
+        )
         for _retry in range(3):
             await self.client.watch(key)
             if await self.client.exists(key):
@@ -171,13 +179,20 @@ class RedisInterruptStore:
             data = json.loads(raw)
         except json.JSONDecodeError:
             return None
-        return Interrupt(id=data["id"], job_id=data["job_id"], message=data["message"],
-                         status=data.get("status", "pending"), response=data.get("response"),
-                         action=data.get("action"), comment=data.get("comment", ""),
-                         resolved_by=data.get("resolved_by", ""))
+        return Interrupt(
+            id=data["id"],
+            job_id=data["job_id"],
+            message=data["message"],
+            status=data.get("status", "pending"),
+            response=data.get("response"),
+            action=data.get("action"),
+            comment=data.get("comment", ""),
+            resolved_by=data.get("resolved_by", ""),
+        )
 
-    async def resolve(self, interrupt_id: str, response: str, *, action: str | None = None,
-                      comment: str = "", resolved_by: str = "") -> bool:
+    async def resolve(
+        self, interrupt_id: str, response: str, *, action: str | None = None, comment: str = "", resolved_by: str = ""
+    ) -> bool:
         key = self._key(interrupt_id)
         for _retry in range(3):
             await self.client.watch(key)
@@ -193,14 +208,20 @@ class RedisInterruptStore:
             if current_data.get("status") != "pending":
                 await self.client.unwatch()
                 return False
-            new_data = json.dumps({
-                "id": interrupt_id, "job_id": current_data.get("job_id", ""),
-                "message": current_data.get("message", ""),
-                "status": "resolved", "response": response, "action": action,
-                "comment": comment, "resolved_by": resolved_by,
-                "created_at": current_data.get("created_at", datetime.now(timezone.utc).isoformat()),
-                "resolved_at": datetime.now(timezone.utc).isoformat(),
-            })
+            new_data = json.dumps(
+                {
+                    "id": interrupt_id,
+                    "job_id": current_data.get("job_id", ""),
+                    "message": current_data.get("message", ""),
+                    "status": "resolved",
+                    "response": response,
+                    "action": action,
+                    "comment": comment,
+                    "resolved_by": resolved_by,
+                    "created_at": current_data.get("created_at", datetime.now(timezone.utc).isoformat()),
+                    "resolved_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
             tr = self.client.multi()
             tr.set(key, new_data, ex=self.ttl_secs)
             exec_result = await tr.execute()
