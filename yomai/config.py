@@ -67,14 +67,34 @@ class MemoryConfig(BaseModel):
 
 
 class AgentConfig(BaseModel):
-    max_tool_calls: int = 10
+    max_iterations: int = Field(default=10, alias="max_tool_calls")
     timeout_secs: int = 120
+
+    @field_validator("timeout_secs")
+    @classmethod
+    def validate_timeout(cls, v: int) -> int:
+        if v <= 0:
+            raise YomaiConfigError(
+                "timeout_secs must be positive.",
+                hint="Set timeout_secs to a value >= 1.",
+            )
+        return v
 
 
 class StreamingConfig(BaseModel):
     heartbeat_secs: int = 15
     max_duration_secs: int = 300
     shutdown_timeout_secs: int = 30
+
+    @field_validator("heartbeat_secs")
+    @classmethod
+    def validate_heartbeat(cls, v: int) -> int:
+        if v < 1:
+            raise YomaiConfigError(
+                "heartbeat_secs must be >= 1.",
+                hint="Set heartbeat_secs to a value >= 1.",
+            )
+        return v
 
 
 class QueueConfig(BaseModel):

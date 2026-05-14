@@ -40,7 +40,10 @@ async def redis_client() -> Any:
     if os.environ.get("TEST_REDIS_URL") == "none":
         pytest.skip("Redis not available (TEST_REDIS_URL=none)")
 
-    import redis.asyncio as redis_lib
+    try:
+        import redis.asyncio as redis_lib  # type: ignore[import-not-found]
+    except ImportError:
+        pytest.skip("redis package not installed")
 
     client = redis_lib.from_url(REDIS_URL, decode_responses=True)
     try:

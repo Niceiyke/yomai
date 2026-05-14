@@ -73,16 +73,18 @@ class SqliteMemory(MemoryBackend):
 
     def _do_load(self, session_id: str) -> list[Message]:
         conn = self._connect()
-        conn.row_factory = sqlite3.Row
-        cur = conn.execute("SELECT history_json FROM sessions WHERE session_id = ?", (session_id,))
-        row = cur.fetchone()
-        conn.close()
-        if row is None:
-            return []
         try:
-            return json.loads(row["history_json"])
-        except (json.JSONDecodeError, KeyError):
-            return []
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("SELECT history_json FROM sessions WHERE session_id = ?", (session_id,))
+            row = cur.fetchone()
+            if row is None:
+                return []
+            try:
+                return json.loads(row["history_json"])
+            except (json.JSONDecodeError, KeyError):
+                return []
+        finally:
+            conn.close()
 
     async def _save_sync(self, session_id: str, history: list[Message]) -> None:
         loop = asyncio.get_running_loop()
@@ -90,12 +92,14 @@ class SqliteMemory(MemoryBackend):
 
     def _do_save(self, session_id: str, history_json: str) -> None:
         conn = self._connect()
-        conn.execute(
-            "INSERT OR REPLACE INTO sessions (session_id, history_json, updated_at) VALUES (?, ?, strftime('%s','now'))",
-            (session_id, history_json),
-        )
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO sessions (session_id, history_json, updated_at) VALUES (?, ?, strftime('%s','now'))",
+                (session_id, history_json),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     async def _clear_sync(self, session_id: str) -> None:
         loop = asyncio.get_running_loop()
@@ -103,9 +107,11 @@ class SqliteMemory(MemoryBackend):
 
     def _do_clear(self, session_id: str) -> None:
         conn = self._connect()
-        conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
+            conn.commit()
+        finally:
+            conn.close()
 
     async def _delete_expired_sync(self) -> None:
         if self._ttl_secs <= 0:
@@ -115,6 +121,8 @@ class SqliteMemory(MemoryBackend):
 
     def _do_delete_expired(self) -> None:
         conn = self._connect()
-        conn.execute("DELETE FROM sessions WHERE updated_at < strftime('%s','now') - ?", (self._ttl_secs,))
-        conn.commit()
-        conn.close()
+        try:
+            conn.execute("DELETE FROM sessions WHERE updated_at < strftime('%s','now') - ?", (self._ttl_secs,))
+            conn.commit()
+        finally:
+            conn.close()

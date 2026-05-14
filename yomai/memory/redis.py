@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -25,6 +26,7 @@ class RedisMemory(MemoryBackend):
         self._ttl_secs = max(0, ttl_hours) * 3600
         self._prefix = prefix.rstrip(":")
         self._client = client
+        self._lock: Any = asyncio.Lock()
 
     @property
     def client(self) -> Any:
@@ -56,11 +58,12 @@ class RedisMemory(MemoryBackend):
         return [msg for msg in history if isinstance(msg, dict)]
 
     async def save(self, session_id: str, user_message: str, assistant_reply: str) -> None:
-        history = list(await self.load(session_id))
-        history.append({"role": "user", "content": user_message})
-        if assistant_reply:
-            history.append({"role": "assistant", "content": assistant_reply})
-        await self._save_history(session_id, self._truncate(history))
+        async with self._lock:
+            history = list(await self.load(session_id))
+            history.append({"role": "user", "content": user_message})
+            if assistant_reply:
+                history.append({"role": "assistant", "content": assistant_reply})
+            await self._save_history(session_id, self._truncate(history))
 
     async def clear(self, session_id: str) -> None:
         await self.client.delete(self._key(session_id))

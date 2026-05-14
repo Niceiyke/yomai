@@ -27,6 +27,8 @@ from yomai.workflow.events import sse_step_done, sse_step_start
 if TYPE_CHECKING:
     from yomai.core.app import Yomai
 
+from yomai.jobs.interrupts import RedisInterruptStore
+
 
 class WorkflowRunner:
     """Orchestrates agent steps, tools, branches, and delegation inside a workflow.
@@ -103,12 +105,12 @@ class WorkflowRunner:
         step_id = f"step_{name}"
         input_hash = self._input_hash(input)
 
-        self._emit_graph_node(step_id, name, "step")
+        await self._emit_graph_node(step_id, name, "step")
 
         if self.job_id is not None:
             existing = await self.app.checkpoints.get(self.job_id, name, input_hash)
             if existing is not None and existing.status == "succeeded":
-                self._emit_checkpoint(name, str(existing.result or ""))
+                await self._emit_checkpoint(name, str(existing.result or ""))
                 self.state[name] = existing.result or ""
                 await self.sse_queue.put(sse_step_start(name, index, None))
                 await self.sse_queue.put(sse_step_done(name, 0))
@@ -156,12 +158,15 @@ class WorkflowRunner:
     # parallel() — concurrent agent steps
     # ------------------------------------------------------------------
 
-    async def parallel(self, steps: list[Awaitable[Any]]) -> list[Any]:
+    async def parallel(self, steps: list[Awaitable[Any]], *, fail_fast: bool = True) -> list[Any]:
         """Run multiple steps concurrently via ``asyncio.gather``.
 
         Each element should be the awaitable returned by calling an async
         method (e.g. ``runner.step(...)``) without ``await``.  Results are
         returned in the same order as the input list.
+
+        Set ``fail_fast=False`` to collect all results even if some steps
+        raise exceptions (exceptions are returned in place of results).
 
         Example::
 
@@ -170,8 +175,11 @@ class WorkflowRunner:
             results = await runner.parallel([a, b])
         """
         parallel_id = f"parallel_{self._step_index + 1}"
-        self._emit_graph_node(parallel_id, f"parallel ({len(steps)})", "parallel")
-        results = list(await asyncio.gather(*steps))
+        await self._emit_graph_node(parallel_id, f"parallel ({len(steps)})", "parallel")
+        if fail_fast:
+            results = list(await asyncio.gather(*steps))
+        else:
+            results = list(await asyncio.gather(*steps, return_exceptions=True))
         await self.sse_queue.put(sse_graph_update(parallel_id, "done"))
         return results
 
@@ -196,7 +204,7 @@ class WorkflowRunner:
         branch_id = f"branch_{name}"
         taken = condition(self.state)
         label = f"{name} → {'true' if taken else 'false'}"
-        self._emit_graph_node(branch_id, label, "parallel")
+        await self._emit_graph_node(branch_id, label, "parallel")
 
         if taken:
             coro = on_true()
@@ -226,14 +234,14 @@ class WorkflowRunner:
         args_preview = ", ".join(f"{k}={v!r}" for k, v in list(kwargs.items())[:3])
         label = f"{tool_name}({args_preview})" if args_preview else tool_name
 
-        self._emit_graph_node(tool_id, label[:80], "tool")
+        await self._emit_graph_node(tool_id, label[:80], "tool")
         start = time.monotonic()
 
         # Tool cache
         cache_ttl: int | None = getattr(fn, "_tool_cache_ttl", None)
         tool_cache = getattr(self.app, "_tool_cache", None)
         if cache_ttl is not None and tool_cache is not None:
-            cached = tool_cache.get(tool_name, kwargs)
+            cached = await tool_cache.get(tool_name, kwargs)
             if cached is not None:
                 duration_ms = int((time.monotonic() - start) * 1000)
                 result_str = str(cached)
@@ -269,7 +277,7 @@ class WorkflowRunner:
             sse_graph_update(tool_id, "done", meta={"result": result_str[:200], "duration_ms": duration_ms})
         )
         if cache_ttl is not None and tool_cache is not None:
-            tool_cache.set(tool_name, kwargs, result, cache_ttl)
+            await tool_cache.set(tool_name, kwargs, result, cache_ttl)
         return result
 
     # ------------------------------------------------------------------
@@ -292,7 +300,7 @@ class WorkflowRunner:
         agent_name = getattr(agent_fn, "__name__", "delegate")
         step_id = f"step_delegate_{agent_name}_{self._step_index}"
         self._step_index += 1
-        self._emit_graph_node(step_id, f"delegate: {agent_name}", "step")
+        await self._emit_graph_node(step_id, f"delegate: {agent_name}", "step")
 
         history = await self.memory.load(self.session_id)
         _tools: list[ToolFunction] = list(tools or getattr(agent_fn, "_yomai_tools", []) or [])
@@ -326,19 +334,19 @@ class WorkflowRunner:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _emit_graph_node(self, node_id: str, label: str, kind: str) -> None:
-        self.sse_queue.put_nowait(sse_graph_upsert(node_id, label[:80], kind, "running"))
+    async def _emit_graph_node(self, node_id: str, label: str, kind: str) -> None:
+        await self.sse_queue.put(sse_graph_upsert(node_id, label[:80], kind, "running"))
         if self._prev_graph_node:
-            self.sse_queue.put_nowait(sse_graph_edge(self._prev_graph_node, node_id, "next"))
+            await self.sse_queue.put(sse_graph_edge(self._prev_graph_node, node_id, "next"))
         self._prev_graph_node = node_id
 
-    def _emit_checkpoint(self, name: str, result_preview: str) -> None:
+    async def _emit_checkpoint(self, name: str, result_preview: str) -> None:
         ckpt_id = f"checkpoint_{name}"
-        self.sse_queue.put_nowait(
+        await self.sse_queue.put(
             sse_graph_upsert(ckpt_id, f"checkpoint: {name}", "checkpoint", "done",
                 meta={"result": result_preview[:100]})
         )
-        self.sse_queue.put_nowait(sse_graph_edge(self._prev_graph_node or f"step_{name}", ckpt_id, "replay"))
+        await self.sse_queue.put(sse_graph_edge(self._prev_graph_node or f"step_{name}", ckpt_id, "replay"))
 
     # ------------------------------------------------------------------
     # Human-in-the-loop
@@ -364,19 +372,26 @@ class WorkflowRunner:
         Parameter *content* is included in the interrupt message for context
         (e.g., the draft text being reviewed) but does not affect the result.
         """
+        import uuid
+
         full_message = message
         if content:
             full_message = f"{message}\n\n---\n{content[:500]}"
-        await self.interrupt(full_message, timeout_secs=timeout_secs)
 
-        # After resolution, look up the interrupt for structured data
-        get_latest = getattr(self.app._interrupt_store, "get_latest_resolved", None)
-        if callable(get_latest):
-            latest = await get_latest()
-            if latest is not None:
-                return latest.to_approval()
+        interrupt_id = uuid.uuid4().hex[:12]
+        intr = Interrupt(id=interrupt_id, job_id=self.job_id or "", message=full_message)
+        await self.app._interrupt_store.create(intr)
+        await self.sse_queue.put(sse_interrupt(interrupt_id, full_message))
 
-        # Fallback: treat as approved
+        try:
+            await self._wait_for_interrupt(interrupt_id, timeout_secs)
+        except asyncio.TimeoutError:
+            await self.app._interrupt_store.delete(interrupt_id)
+            return ApprovalResult(action="rejected", comment="timeout")
+
+        resolved = await self.app._interrupt_store.get(interrupt_id)
+        if resolved is not None:
+            return resolved.to_approval()
         return ApprovalResult(action="approved")
 
     async def interrupt(self, message: str, *, timeout_secs: int | None = None) -> str:
@@ -395,31 +410,31 @@ class WorkflowRunner:
         # Emit the interrupt SSE event so clients know to prompt the human
         await self.sse_queue.put(sse_interrupt(interrupt_id, message))
 
-        # Wait for resolution
-        is_redis = type(self.app._interrupt_store).__name__ == "RedisInterruptStore"
         try:
-            if is_redis:
-                # Poll Redis every 200ms until resolved
-                deadline = asyncio.get_running_loop().time() + (timeout_secs or 3600)
-                while asyncio.get_running_loop().time() < deadline:
-                    resolved = await self.app._interrupt_store.get(interrupt_id)
-                    if resolved and resolved.status == "resolved":
-                        return resolved.response or ""
-                    await asyncio.sleep(0.2)
-                await self.app._interrupt_store.delete(interrupt_id)
-                raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out after {timeout_secs}s")
-            else:
-                event = self.app._interrupt_store.event(interrupt_id)
-                if timeout_secs:
-                    await asyncio.wait_for(event.wait(), timeout=timeout_secs)
-                else:
-                    await event.wait()
+            await self._wait_for_interrupt(interrupt_id, timeout_secs)
         except asyncio.TimeoutError as exc:
             await self.app._interrupt_store.delete(interrupt_id)
             raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out after {timeout_secs}s") from exc
 
         resolved = await self.app._interrupt_store.get(interrupt_id)
         return resolved.response if resolved else ""
+
+    async def _wait_for_interrupt(self, interrupt_id: str, timeout_secs: int | None = None) -> None:
+        is_redis = isinstance(self.app._interrupt_store, RedisInterruptStore)
+        if is_redis:
+            deadline = asyncio.get_running_loop().time() + (timeout_secs or 3600)
+            while asyncio.get_running_loop().time() < deadline:
+                resolved = await self.app._interrupt_store.get(interrupt_id)
+                if resolved and resolved.status == "resolved":
+                    return
+                await asyncio.sleep(0.2)
+            raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out")
+        else:
+            event = self.app._interrupt_store.event(interrupt_id)
+            if timeout_secs:
+                await asyncio.wait_for(event.wait(), timeout=timeout_secs)
+            else:
+                await event.wait()
 
     def _human_tool(self) -> ToolFunction:
         """Return a ``@tool`` that the agent can call to request human input.
@@ -453,13 +468,14 @@ class WorkflowRunner:
     async def _run_agent(self, name: str, agent_fn: Callable[..., Any], input: str) -> str:
         tools = list(getattr(agent_fn, "_yomai_tools", []) or [])
         tools.append(self._human_tool())
+        system = getattr(agent_fn, "_yomai_agent_system", "") or ""
         history = await self.memory.load(self.session_id)
         loop = AgentLoop(
             self.app._build_provider(), tools, self.app.config.agent, self.app.config.llm,
             budget_tracker=self.app.budget, session_id=self.session_id, hooks=self.app.hooks,
             tool_cache=self.app._tool_cache,
         )
-        async for sse in loop.run(input, history=history, system=""):
+        async for sse in loop.run(input, history=history, system=system):
             await self.raise_if_cancelled()
             await self.sse_queue.put(sse)
         await self.memory.save(self.session_id, input, loop.last_reply)

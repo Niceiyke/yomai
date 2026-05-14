@@ -95,8 +95,10 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
             return [_coerce_value(v, item_type, f"{name}[{i}]") for i, v in enumerate(value)]
         # dict[T, U]
         if origin is dict and len(args) == 2:
+            if not isinstance(value, dict):
+                raise ValueError(f"Invalid field {name}: expected dict, got {type(value).__name__}")
             key_type, val_type = args
-            return {_coerce_value(k, key_type, f"{name}[key]"): _coerce_value(v, val_type, f"{name}[{k}]") for k, v in (value or {}).items()}
+            return {_coerce_value(k, key_type, f"{name}[key]"): _coerce_value(v, val_type, f"{name}[{k}]") for k, v in value.items()}
         # Union types (including Optional)
         if origin is Union and args:
             # Try each union member
@@ -136,7 +138,7 @@ def _coerce_value(value: Any, annotation: Any, name: str) -> Any:
                 return value
             raise ValueError(f"Invalid field {name}: must be one of {literals}")
         # Allowlist: only validate safe primitive types and Pydantic models via TypeAdapter
-        if annotation in _SAFE_ANNOTATIONS or (inspect.isclass(annotation) and issubclass(annotation, (BaseModel, enum.Enum))):
+        if annotation in _SAFE_ANNOTATIONS or issubclass(annotation, (BaseModel, enum.Enum)):
             try:
                 return TypeAdapter(annotation).validate_python(value)
             except ValidationError:
@@ -289,8 +291,8 @@ class AgentRoute(BaseRoute):
                 message_out = "Internal server error" if env.YOMAI_ENV == "production" else str(exc)
                 await put_sse(sse_error(message_out, exc.__class__.__name__))
             finally:
-                if agent_loop is not None and agent_loop.last_reply:
-                    await self.memory.save(session_id, _message_text(message), agent_loop.last_reply)  # type: ignore[union-attr]
+                if agent_loop is not None:
+                    await self.memory.save(session_id, _message_text(message), agent_loop.last_reply or "")  # type: ignore[union-attr]
                 await queue.put(None)
 
         async def generate() -> AsyncIterator[str]:
@@ -436,7 +438,7 @@ class WorkflowRoute(BaseRoute):
         async def run_workflow() -> None:
             try:
                 runner = WorkflowRunner(queue, session_id, self.memory, self.app)  # type: ignore[arg-type]
-                kwargs = self._build_kwargs(body, runner, path_kwargs, request)
+                kwargs = self._build_kwargs(body, runner, path_kwargs, request, session_id=session_id)
                 result = self.handler(**kwargs)
                 if inspect.isawaitable(result):
                     result = await result

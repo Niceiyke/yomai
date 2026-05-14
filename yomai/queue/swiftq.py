@@ -78,7 +78,8 @@ class SwiftQQueueBackend:
         return run_workflow
 
     async def enqueue_workflow(self, workflow: QueuedWorkflow) -> str:
-        self._task.apply_async(
+        await asyncio.to_thread(
+            self._task.apply_async,
             kwargs={
                 "job_id": workflow.job_id,
                 "path": workflow.route,

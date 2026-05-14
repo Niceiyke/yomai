@@ -50,7 +50,7 @@ class DictMemory(MemoryBackend):
 
     def _truncate(self, history: list[Message]) -> list[Message]:
         if self._max <= 0 or len(history) <= self._max:
-            return history
+            return history  # max_messages=0 means unlimited
 
         first = history[0]
         if first.get("role") == "system" and self._max > 1:

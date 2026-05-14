@@ -145,28 +145,15 @@ async def test_playground_production_404() -> None:
 
 
 @pytest.mark.asyncio
-async def test_timeout_saves_partial_output_when_content_produced() -> None:
-    """On timeout, any text already streamed is saved to session memory.
-    
-    timeout_secs=0 is an edge case where cancellation fires before the task
-    yields — nothing to save. The fix preserves content when a longer timeout
-    fires mid-generation (tested manually with real LLM).
-    """
-    app = Yomai(
-        llm=LLMConfig(api_key=""),
-        agent=AgentConfig(timeout_secs=0),
-        memory=MemoryConfig(backend="dict", db_path="/unused"),
-    )
+async def test_timeout_secs_must_be_positive() -> None:
+    """timeout_secs=0 (or negative) is rejected by config validation."""
+    from yomai.exceptions import YomaiConfigError
 
-    @app.agent("/chat")
-    async def chat(message: str, session_id: str) -> None:
-        pass
+    with pytest.raises(YomaiConfigError, match="timeout_secs must be positive"):
+        AgentConfig(timeout_secs=0)
 
-    with mock_llm(["late"]):
-        events = await YomaiTestClient(app).get_events("/chat", "hello", session_id="timeout")
-    assert any(event.get("code") == "timeout" for event in events)
-    # timeout_secs=0 cancels before task yields — nothing produced, nothing saved
-    assert await app.memory.load("timeout") == []
+    with pytest.raises(YomaiConfigError, match="timeout_secs must be positive"):
+        AgentConfig(timeout_secs=-1)
 
 
 @pytest.mark.asyncio

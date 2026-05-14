@@ -100,13 +100,14 @@ class AnthropicProvider(LLMProvider):
                             args = current_tool["args"]
                             if current_tool.get("json"):
                                 try:
-                                    args = json.loads(str(current_tool["json"]))
+                                    parsed = json.loads(str(current_tool["json"]))
+                                    args = parsed if isinstance(parsed, dict) else {"value": parsed}
                                 except json.JSONDecodeError:
                                     args = current_tool["args"]
                             yield ToolCall(
                                 id=str(current_tool["id"]),
                                 name=str(current_tool["name"]),
-                                args=dict(args),
+                                args=dict(args) if isinstance(args, dict) else {"value": args},
                             )
                             current_tool = None
 

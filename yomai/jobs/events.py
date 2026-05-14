@@ -70,9 +70,11 @@ class InMemoryJobEventStore:
             last_id = 0
         while True:
             pending = await self.read_after(job_id, last_id)
-            for event in pending:
-                last_id = int(event.id)
-                yield event
+            if pending:
+                for event in pending:
+                    last_id = int(event.id)
+                    yield event
+                continue
 
             condition = self._conditions[job_id]
             try:

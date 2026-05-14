@@ -10,6 +10,7 @@ from pydantic import BaseModel
 from starlette.responses import JSONResponse
 
 from yomai._types import Request
+from yomai.auth import NoAuth
 from yomai.memory import MemoryBackend
 
 if TYPE_CHECKING:
@@ -131,7 +132,7 @@ class BaseRoute:
             return JSONResponse({"error": "Server is shutting down"}, status_code=503)
 
         # Custom auth backend (skip NoAuth — it's the sentinel for "no auth required")
-        if self.auth is not None and type(self.auth).__name__ != "NoAuth":
+        if self.auth is not None and not isinstance(self.auth, NoAuth):
             result = await self.auth.authenticate(request)
             if result is None:
                 return JSONResponse({"error": "Authentication required"}, status_code=401)

@@ -31,6 +31,27 @@ class FakeRedisLimit:
         self.deleted.append(key)
         self.values.pop(key, None)
 
+    def register_script(self, script: str) -> FakeScript:
+        return FakeScript(self, script)
+
+
+class FakeScript:
+    def __init__(self, redis: FakeRedisLimit, script: str) -> None:
+        self._redis = redis
+        self._script = script
+
+    async def __call__(self, keys: list[str] | None = None, args: list[int] | None = None) -> int:
+        keys = keys or []
+        args = args or []
+        key = keys[0] if keys else ""
+        limit = args[0] if args else 0
+        current = self._redis.values.get(key, 0) + 1
+        self._redis.values[key] = current
+        if limit <= 0 or current <= limit:
+            return 1
+        self._redis.values[key] = current - 1
+        return 0
+
 
 @pytest.mark.asyncio
 async def test_redis_rate_limiter_request_limit_and_concurrency() -> None:

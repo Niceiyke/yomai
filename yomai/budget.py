@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 from typing import Any
 
 from yomai.config import BudgetConfig
@@ -42,6 +43,7 @@ class BudgetTracker:
         self._sessions: dict[str, BudgetState] = {}
         self._daily_cost: float = 0.0
         self._daily_tokens: int = 0
+        self._last_reset_date = datetime.date.today()
 
     async def check(
         self,
@@ -52,6 +54,12 @@ class BudgetTracker:
     ) -> dict[str, Any]:
         """Check budget after an LLM response. Returns {'exceeded': True} if limits hit."""
         async with self._lock:
+            today = datetime.date.today()
+            if today > self._last_reset_date:
+                self._daily_cost = 0.0
+                self._daily_tokens = 0
+                self._last_reset_date = today
+
             state = self._sessions.setdefault(session_id, BudgetState())
             state.tokens_in += tokens_in
             state.tokens_out += tokens_out

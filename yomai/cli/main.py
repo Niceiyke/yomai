@@ -77,7 +77,25 @@ async def search(query: str) -> str:
 @tool
 def calculate(expression: str) -> float:
     """Evaluate a mathematical expression."""
-    return eval(expression)
+    import ast
+    import operator as _op
+    _OPS: dict[type, Any] = {
+        ast.Add: _op.add, ast.Sub: _op.sub, ast.Mult: _op.mul,
+        ast.Div: _op.truediv, ast.Pow: _op.pow, ast.USub: _op.neg,
+    }
+    def _eval(node: ast.AST) -> float:
+        match node:
+            case ast.Expression(body=body):
+                return _eval(body)
+            case ast.Constant(value=value):
+                return float(value)
+            case ast.BinOp(left=l, op=op, right=r):
+                return _OPS[type(op)](_eval(l), _eval(r))
+            case ast.UnaryOp(op=op, operand=o):
+                return _OPS[type(op)](_eval(o))
+            case _:
+                raise ValueError(f"Unsupported expression: {expression!r}")
+    return _eval(ast.parse(expression, mode="eval"))
 '''
 
 @app.command()
@@ -154,6 +172,16 @@ def worker(
     module_name, _, attr = app_path.partition(":")
     if not module_name or not attr:
         raise typer.BadParameter("app_path must look like 'module:app'")
+
+    import sys
+    sys.path.insert(0, os.getcwd())
+
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     module = importlib.import_module(module_name)
     yomai_app: Any = getattr(module, attr)
     if getattr(yomai_app.config.queue, "backend", "none") != "swiftq":

@@ -35,10 +35,14 @@ class InMemoryRateLimiter:
             bucket = self._requests[key]
             while bucket and current - bucket[0] >= 60:
                 bucket.popleft()
-            if len(bucket) >= limit:
-                retry_after = max(1, int(60 - (current - bucket[0])))
-                return retry_after
+            if not bucket:
+                del self._requests[key]
+            else:
+                if len(bucket) >= limit:
+                    retry_after = max(1, int(60 - (current - bucket[0])))
+                    return retry_after
             bucket.append(current)
+            self._requests[key] = bucket
             return None
 
     async def acquire_concurrent(self, key: str, limit: int | None) -> bool:
@@ -54,6 +58,8 @@ class InMemoryRateLimiter:
     async def release_concurrent(self, key: str) -> None:
         async with self._lock:
             self._concurrent[key] = max(0, self._concurrent[key] - 1)
+            if self._concurrent[key] <= 0:
+                del self._concurrent[key]
 
 
 class RedisRateLimiter:

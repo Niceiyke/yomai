@@ -115,6 +115,7 @@ class AgentLoop:
         )
 
     async def run(self, message: str | list[dict[str, Any]], history: list[Message], system: str = "") -> AsyncGenerator[str, None]:
+        self._inside_reasoning = False
         messages: list[Message] = [*history, {"role": "user", "content": message}]
         tool_schemas = self._tool_schemas()
         iterations = 0
@@ -136,7 +137,7 @@ class AgentLoop:
         yield sse_graph_upsert("user_msg", user_label, "user_msg", "done")
 
         try:
-            while iterations <= self.config.max_tool_calls:
+            while iterations <= self.config.max_iterations:
                 saw_tool_call = False
                 llm_id = f"llm_{iterations}"
                 yield sse_graph_upsert(llm_id, f"LLM: {model_label}", "llm", "running")
@@ -158,11 +159,11 @@ class AgentLoop:
                         if self.hooks is not None:
                             self.hooks.emit_background("agent.chunk", session_id=self.session_id, content=content[:200])
                     elif isinstance(event, ToolCall):
-                        if iterations >= self.config.max_tool_calls:
-                            yield sse_error("Maximum tool calls reached", "max_tool_calls_exceeded")
+                        if iterations >= self.config.max_iterations:
+                            yield sse_error("Maximum iterations reached", "max_iterations_exceeded")
                             if self.hooks is not None:
                                 self.hooks.emit_background("agent.error", session_id=self.session_id,
-                                    error="max_tool_calls_exceeded")
+                                    error="max_iterations_exceeded")
                             saw_tool_call = False
                             break
                         saw_tool_call = True
@@ -284,7 +285,7 @@ class AgentLoop:
         # Check tool cache
         cache_ttl: int | None = getattr(fn, "_tool_cache_ttl", None) if fn is not None else None
         if cache_ttl is not None and fn is not None and self.tool_cache is not None:
-            cached = self.tool_cache.get(tool_call.name, tool_call.args)
+            cached = await self.tool_cache.get(tool_call.name, tool_call.args)
             if cached is not None:
                 result = cached
                 duration_ms = int((time.monotonic() - start) * 1000)
@@ -360,7 +361,7 @@ class AgentLoop:
 
         # Cache successful results
         if cache_ttl is not None and fn is not None and not is_error and self.tool_cache is not None:
-            self.tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
+            await self.tool_cache.set(tool_call.name, tool_call.args, result, cache_ttl)
 
         if self.hooks is not None:
             self.hooks.emit_background("agent.tool_result", session_id=self.session_id,

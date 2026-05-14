@@ -77,6 +77,7 @@ class OpenAIProvider(LLMProvider):
             emitted_tool_calls = False
             input_tokens = 0
             output_tokens = 0
+            last_finish_reason = None
 
             try:
                 stream = await self.client.chat.completions.create(**kwargs)
@@ -91,6 +92,9 @@ class OpenAIProvider(LLMProvider):
                         continue
                     choice = choices[0]
                     delta = getattr(choice, "delta", None)
+                    finish_reason = getattr(choice, "finish_reason", None)
+                    if finish_reason:
+                        last_finish_reason = finish_reason
 
                     if delta is not None:
                         content = getattr(delta, "content", None)
@@ -119,7 +123,7 @@ class OpenAIProvider(LLMProvider):
                                 yield ToolCall(id=entry["id"] or entry["name"], name=entry["name"], args=args)
                         emitted_tool_calls = True
 
-                if not emitted_tool_calls:
+                if not emitted_tool_calls and last_finish_reason is None:
                     for entry in tool_parts.values():
                         if entry["name"]:
                             try:

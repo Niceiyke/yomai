@@ -14,7 +14,7 @@ class ErrorMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: Any) -> Response:
         try:
             return await call_next(request)
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, GeneratorExit):
             raise
         except Exception as exc:
             if os.environ.get("YOMAI_ENV") != "production":

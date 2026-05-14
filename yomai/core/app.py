@@ -660,7 +660,14 @@ class Yomai:
         try:
             for attempt in range(max_retries + 1):
                 if attempt > 0:
+                    await self.rate_limiter.release_concurrent(session_id)
                     await asyncio.sleep(1.0 * (2 ** (attempt - 1)))
+                    acquired = await self.rate_limiter.acquire_concurrent(
+                        session_id,
+                        self.config.rate_limits.max_concurrent_per_session,
+                    )
+                    if not acquired:
+                        raise RuntimeError("Lost rate limit slot during retry")
                     await self.jobs.update_status(job_id, "retrying")
                     await self.hooks.emit("workflow.retrying", job_id=job_id, route=path, attempt=attempt)
 
@@ -884,6 +891,7 @@ class Yomai:
             fn._yomai_app = self
             fn._yomai_tools = tools or []
             fn._yomai_agent_config = self.config.agent
+            fn._yomai_agent_system = system
             return fn
 
         return decorator
@@ -1247,9 +1255,12 @@ class Yomai:
                 on_stream_start=self._stream_started,
                 on_stream_end=self._stream_finished,
                 should_accept=self._accepting_connections,
+                log_usage=self.config.dev.log_usage,
+                required_api_key=self.config.dev.api_key if api_key is None else api_key,
                 path_params=path_params,
                 cors=cors or {},
                 dependencies=dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["HEAD"]))
             self._paths.add(path)
@@ -1283,9 +1294,12 @@ class Yomai:
                 on_stream_start=self._stream_started,
                 on_stream_end=self._stream_finished,
                 should_accept=self._accepting_connections,
+                log_usage=self.config.dev.log_usage,
+                required_api_key=self.config.dev.api_key if api_key is None else api_key,
                 path_params=path_params,
                 cors=cors or {},
                 dependencies=dependencies or [],
+                auth=self._auth,
             )
             self._starlette.router.routes.append(Route(path, route.handle, methods=["OPTIONS"]))
             self._paths.add(path)
@@ -1452,6 +1466,8 @@ class Yomai:
             return "string"  # ISO 8601
         if inspect.isclass(annotation) and issubclass(annotation, enum.Enum):
             return "string"
+        if inspect.isclass(annotation) and issubclass(annotation, BaseModel):
+            return "object"
         # Handle typing.Literal
         literals = getattr(annotation, "__values__", None)
         if literals is not None:
