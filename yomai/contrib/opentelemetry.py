@@ -38,13 +38,13 @@ class YomaiTracer:
     def _ensure_tracer(self) -> Any:
         if self._tracer is None:
             try:
-                from opentelemetry import trace
-                from opentelemetry.sdk.resources import Resource
-                from opentelemetry.sdk.trace import TracerProvider
+                from opentelemetry import trace  # type: ignore[import-not-found]
+                from opentelemetry.sdk.resources import Resource  # type: ignore[import-not-found]
+                from opentelemetry.sdk.trace import TracerProvider  # type: ignore[import-not-found]
 
                 provider = TracerProvider(resource=Resource.create({"service.name": self.service_name}))
                 if self._exporter is not None:
-                    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+                    from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore[import-not-found]
 
                     provider.add_span_processor(BatchSpanProcessor(self._exporter))
                 trace.set_tracer_provider(provider)

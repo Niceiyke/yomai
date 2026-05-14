@@ -114,7 +114,7 @@ class AgentRequest(BaseModel):
             "document_url": "document",
             "document": "document",
         }
-        return mapping.get(t, t)
+        return mapping.get(t, t) or "unknown"
 
 
 # ---------------------------------------------------------------------------

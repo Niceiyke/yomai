@@ -15,7 +15,7 @@ class DictMemory(MemoryBackend):
     development, tests, and small single-process deployments.
     """
 
-    _EVICT_SAMPLE = 100
+    _EVICT_SAMPLE: int = 100
     _FULL_EVICT_INTERVAL = 600.0
 
     def __init__(self, max_messages: int = 20, ttl_hours: int = 24) -> None:

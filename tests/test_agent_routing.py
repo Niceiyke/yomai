@@ -24,8 +24,8 @@ class TestAgentRegistry:
         def agent_a(message: str, session_id: str) -> None: ...
         def agent_b(message: str, session_id: str) -> None: ...
 
-        agent_a._yomai_path = "/chat/a"
-        agent_b._yomai_path = "/chat/b"
+        setattr(agent_a, "_yomai_path", "/chat/a")
+        setattr(agent_b, "_yomai_path", "/chat/b")
 
         registry = AgentRegistry()
         registry.register("my_agent", agent_a)
@@ -55,7 +55,7 @@ class TestAgentRegistry:
 
         tool = registry.as_tool("my_agent")
         assert callable(tool)
-        assert tool.tool_name == "call_my_agent"
+        assert getattr(tool, "tool_name", None) == "call_my_agent"
 
     def test_as_tool_unknown_raises(self) -> None:
         from yomai.agents.routing import AgentCallError, AgentRegistry
@@ -70,8 +70,8 @@ class TestAgentRegistry:
         def a(message: str, session_id: str) -> None: ...
         def b(message: str, session_id: str) -> None: ...
 
-        a._yomai_tools = []
-        b._yomai_tools = []
+        setattr(a, "_yomai_tools", [])
+        setattr(b, "_yomai_tools", [])
 
         registry = AgentRegistry()
         registry.register("a", a)
@@ -90,10 +90,11 @@ class TestAgentTool:
 
         tool = agent_tool(my_agent, name="helper")
         assert callable(tool)
-        assert tool.tool_name == "call_helper"
-        assert isinstance(tool.schema, dict)
-        assert "message" in tool.schema["properties"]
-        assert "message" in tool.schema["required"]
+        assert getattr(tool, "tool_name", None) == "call_helper"
+        tool_schema = getattr(tool, "schema", {})
+        assert isinstance(tool_schema, dict)
+        assert "message" in tool_schema["properties"]
+        assert "message" in tool_schema["required"]
 
     def test_agent_tool_with_extra_params(self) -> None:
         from yomai.agents.routing import agent_tool
@@ -101,7 +102,7 @@ class TestAgentTool:
         def my_agent(message: str, city: str, session_id: str) -> None: ...
 
         tool = agent_tool(my_agent, name="weather")
-        assert "city" in tool.schema["properties"]
+        assert "city" in getattr(tool, "schema", {})["properties"]
 
     def test_agent_tool_custom_name(self) -> None:
         from yomai.agents.routing import agent_tool

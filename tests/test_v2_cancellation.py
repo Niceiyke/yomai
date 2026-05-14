@@ -52,6 +52,7 @@ async def test_async_workflow_observes_cancel_between_steps() -> None:
         await asyncio.wait_for(started.wait(), timeout=1)
         cancel = await client.post(f"/__yomai__/jobs/{body['job_id']}/cancel")
         release.set()
+        status: dict[str, Any] = {}
         for _ in range(20):
             status = (await client.get(body["status_url"])).json()
             if status["status"] == "cancelled":

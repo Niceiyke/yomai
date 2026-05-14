@@ -268,7 +268,7 @@ async def test_parallel_fail_fast_false_collects_errors() -> None:
                 return f"error: {e}"
             return "should not reach"
 
-        coros = [ok_tool(), fail_tool()]
+        coros: list[Any] = [ok_tool(), fail_tool()]
         results = await runner.parallel(coros, fail_fast=False)
         return {"results": [str(r) for r in results]}
 
@@ -497,8 +497,8 @@ def test_extract_json_from_markdown_fence() -> None:
     route = AgentRoute.__new__(AgentRoute)
     text = 'Here is my analysis:\n\n```json\n{"answer": "yes", "confidence": 0.95}\n```\n\nHope that helps!'
     result = route._extract_json(text, Result)
-    assert result.answer == "yes"
-    assert result.confidence == 0.95
+    assert result.answer == "yes"  # pyright: ignore[reportAttributeAccessIssue]
+    assert result.confidence == 0.95  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_extract_json_from_plain_fence() -> None:
@@ -513,7 +513,7 @@ def test_extract_json_from_plain_fence() -> None:
     route = AgentRoute.__new__(AgentRoute)
     text = '```\n{"value": 42}\n```'
     result = route._extract_json(text, Result)
-    assert result.value == 42
+    assert result.value == 42  # pyright: ignore[reportAttributeAccessIssue]
 
 
 def test_extract_json_returns_raw_when_no_fence() -> None:
@@ -528,7 +528,7 @@ def test_extract_json_returns_raw_when_no_fence() -> None:
     route = AgentRoute.__new__(AgentRoute)
     text = 'preable text {"x": 7} trailing'
     result = route._extract_json(text, Result)
-    assert result.x == 7
+    assert result.x == 7  # pyright: ignore[reportAttributeAccessIssue]
 
 
 # ===========================================================================

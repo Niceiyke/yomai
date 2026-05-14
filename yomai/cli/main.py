@@ -137,7 +137,7 @@ def run(
 
     # Auto-load .env if python-dotenv is available
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         load_dotenv()
     except ImportError:
@@ -181,7 +181,7 @@ def worker(
     sys.path.insert(0, os.getcwd())
 
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         load_dotenv()
     except ImportError:
@@ -215,7 +215,7 @@ def serve(
 
     # Auto-load .env
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         load_dotenv()
     except ImportError:
@@ -249,7 +249,7 @@ def dev(
     sys.path.insert(0, os.getcwd())
 
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         load_dotenv()
     except ImportError:
@@ -427,7 +427,7 @@ def evaluate(
     sys.path.insert(0, os.getcwd())
 
     try:
-        from dotenv import load_dotenv
+        from dotenv import load_dotenv  # type: ignore[import-not-found]
 
         load_dotenv()
     except ImportError:

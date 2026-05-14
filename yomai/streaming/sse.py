@@ -111,7 +111,7 @@ def sse_graph_upsert(
 
 
 def sse_graph_edge(from_id: str, to_id: str, label: str = "") -> str:
-    return format_sse("graph", GraphEdgeData(from_=from_id, to=to_id, label=label))
+    return format_sse("graph", GraphEdgeData(from_=from_id, to=to_id, label=label))  # pyright: ignore[reportCallIssue]
 
 
 def sse_graph_update(id: str, status: str, *, meta: dict[str, Any] | None = None) -> str:

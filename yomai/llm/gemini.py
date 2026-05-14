@@ -35,7 +35,7 @@ def _gemini_tool_schemas(tools: list[ToolFunction]) -> list[ToolSchema]:
 class GeminiProvider(LLMProvider):
     def __init__(self, config: LLMConfig) -> None:
         try:
-            from google import genai
+            from google import genai  # type: ignore[import-not-found]
         except ImportError as exc:
             raise YomaiLLMError(
                 "Google GenAI SDK is not installed.",

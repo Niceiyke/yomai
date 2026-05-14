@@ -420,7 +420,7 @@ class WorkflowRunner:
             raise asyncio.TimeoutError(f"Interrupt {interrupt_id} timed out after {timeout_secs}s") from exc
 
         resolved = await self.app._interrupt_store.get(interrupt_id)
-        return resolved.response if resolved else ""
+        return (resolved.response or "") if resolved else ""
 
     async def _wait_for_interrupt(self, interrupt_id: str, timeout_secs: int | None = None) -> None:
         is_redis = isinstance(self.app._interrupt_store, RedisInterruptStore)
@@ -459,16 +459,16 @@ class WorkflowRunner:
             return await self.interrupt(question)
 
         # Build a tool schema so the LLM knows about it
-        request_human_input.schema = {
+        setattr(request_human_input, "schema", {
             "name": "request_human_input",
             "description": "Ask a human for input or approval.",
             "type": "object",
             "properties": {"question": {"type": "string", "description": "The question to ask the human"}},
             "required": ["question"],
-        }
-        request_human_input.tool_name = "request_human_input"
-        request_human_input._tool_timeout_secs = None
-        request_human_input._tool_max_retries = 0
+        })
+        setattr(request_human_input, "tool_name", "request_human_input")
+        setattr(request_human_input, "_tool_timeout_secs", None)
+        setattr(request_human_input, "_tool_max_retries", 0)
         return request_human_input
 
     async def _run_agent(self, name: str, agent_fn: Callable[..., Any], input: str) -> str:

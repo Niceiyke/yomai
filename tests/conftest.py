@@ -21,7 +21,7 @@ def redis_available() -> bool:
     if os.environ.get("TEST_REDIS_URL") == "none":
         return False
     try:
-        import redis.asyncio  # noqa: F401
+        import redis.asyncio  # type: ignore[import-not-found]  # noqa: F401
 
         return True
     except ImportError:

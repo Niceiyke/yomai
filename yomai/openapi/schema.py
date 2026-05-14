@@ -117,7 +117,7 @@ def build_openapi(
                         }
                     )
 
-            responses = {
+            responses: dict[str, Any] = {
                 "200": {"description": "Successful response"},
                 "401": {"description": "Missing or invalid API key"},
                 "503": {"description": "Server shutting down"},

@@ -43,7 +43,7 @@ class SwiftQQueueBackend:
         }
         if "result_ttl" in inspect.signature(Queue.redis).parameters:
             redis_kwargs["result_ttl"] = config.job_ttl_secs
-        self.queue = Queue.redis(config.url, **redis_kwargs)
+        self.queue: Any = Queue.redis(config.url, **redis_kwargs)
         self._task = self._register_task()
 
     def _register_task(self) -> Any:

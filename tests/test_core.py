@@ -26,8 +26,8 @@ def test_tool_schema() -> None:
         """Add."""
         return a + b
 
-    assert add.schema["properties"]["a"] == {"type": "integer"}
-    assert add.schema["required"] == ["a"]
+    assert getattr(add, "schema", {})["properties"]["a"] == {"type": "integer"}
+    assert getattr(add, "schema", {})["required"] == ["a"]
 
 
 @pytest.mark.asyncio

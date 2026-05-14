@@ -133,7 +133,7 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_valid_jwt_passes(self) -> None:
         pytest.importorskip("jwt")
-        import jwt as pyjwt
+        import jwt as pyjwt  # type: ignore[import-not-found]
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
@@ -178,7 +178,7 @@ class TestJWTAuth:
         pytest.importorskip("jwt")
         import datetime
 
-        import jwt as pyjwt
+        import jwt as pyjwt  # type: ignore[import-not-found]
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
@@ -204,7 +204,7 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_wrong_algorithm_fails(self) -> None:
         pytest.importorskip("jwt")
-        import jwt as pyjwt
+        import jwt as pyjwt  # type: ignore[import-not-found]
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
@@ -226,7 +226,7 @@ class TestJWTAuth:
     @pytest.mark.asyncio
     async def test_missing_prefix_fails(self) -> None:
         pytest.importorskip("jwt")
-        import jwt as pyjwt
+        import jwt as pyjwt  # type: ignore[import-not-found]
 
         from yomai._types import Request
         from yomai.auth.jwt import JWTAuth
@@ -446,7 +446,7 @@ class TestSignedSessionMiddleware:
             response = Response(status_code=200)
             await response(scope, receive, send)
 
-        mw.app = dummy_app
+        setattr(mw, "app", dummy_app)  # pyright: ignore[reportAttributeAccessIssue]
 
         from starlette.types import Message
 

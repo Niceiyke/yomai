@@ -44,12 +44,12 @@ class TestGeminiProvider:
 
         def fake_tool(a: int) -> str: ...
 
-        fake_tool.tool_name = "my_tool"
-        fake_tool.schema = {
+        setattr(fake_tool, "tool_name", "my_tool")
+        setattr(fake_tool, "schema", {
             "description": "A test tool",
             "properties": {"a": {"type": "integer", "description": "param"}},
             "required": ["a"],
-        }
+        })
         schemas = _gemini_tool_schemas([fake_tool])
         assert len(schemas) == 1
         assert schemas[0]["name"] == "my_tool"

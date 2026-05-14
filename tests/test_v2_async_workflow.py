@@ -30,6 +30,7 @@ async def test_async_workflow_returns_202_and_completes_inline_job() -> None:
         body = response.json()
         job_id = body["job_id"]
 
+        status: dict[str, Any] = {}
         for _ in range(20):
             status = (await client.get(body["status_url"])).json()
             if status["status"] == "succeeded":
@@ -63,6 +64,7 @@ async def test_async_workflow_failure_updates_job_and_stream() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.post("/fail", json={"topic": "input"})
         body = response.json()
+        status: dict[str, Any] = {}
         for _ in range(20):
             status = (await client.get(body["status_url"])).json()
             if status["status"] == "failed":

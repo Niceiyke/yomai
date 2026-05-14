@@ -168,8 +168,8 @@ class TestProviderNormalization:
                         result.append(block)
                 return result
 
-            async def stream(self, messages: list, tools: list, system: str) -> Any:
-                yield None
+            async def stream(self, messages: list, tools: list, system: str) -> Any:  # pyright: ignore[reportIncompatibleMethodOverride]
+                yield None  # type: ignore[misc]
 
         provider = TestProv()
         msgs = [

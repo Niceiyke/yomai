@@ -345,6 +345,7 @@ class AgentLoop:
                     )
                 return
 
+        result: Any = ""
         if fn is None:
             result = f"Error: Unknown tool {tool_call.name!r}"
             yield sse_graph_update(tool_id, "error", meta={"message": result})

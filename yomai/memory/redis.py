@@ -32,14 +32,14 @@ class RedisMemory(MemoryBackend):
     def client(self) -> Any:
         if self._client is None:
             try:
-                from redis import asyncio as redis_asyncio  # type: ignore[import-not-found]
+                from redis import asyncio as redis_asyncio  # type: ignore[import-not-found, unused-ignore]
             except Exception as exc:  # noqa: BLE001 - optional dependency guard
                 raise YomaiConfigError(
                     "Redis memory backend requires redis to be installed.",
                     hint="Install Yomai with redis extras or install redis>=5.",
                     docs="https://yomai.dev/roadmap",
                 ) from exc
-            self._client = redis_asyncio.from_url(self.url, decode_responses=True)
+            self._client = redis_asyncio.from_url(self.url, decode_responses=True)  # pyright: ignore[reportAttributeAccessIssue]
         return self._client
 
     def _key(self, session_id: str) -> str:

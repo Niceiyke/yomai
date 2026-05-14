@@ -84,7 +84,7 @@ class _SharedTests:
         for i in range(10):
             await be.save("s1", f"q{i}", f"a{i}")
         hist = await be.load("s1")
-        assert len(hist) == be._max  # default 20, so 20 of 20 possible messages
+        assert len(hist) == be._max  # pyright: ignore[reportAttributeAccessIssue]
         assert hist[0]["content"] == "q0"
         assert hist[-1]["content"] == "a9"
 

@@ -160,11 +160,11 @@ def tool(
     """
 
     def decorate(func: F) -> F:
-        func.schema = _build_schema(func)
-        func.tool_name = func.__name__
-        func._tool_timeout_secs = timeout_secs
-        func._tool_max_retries = max_retries
-        func._tool_cache_ttl = cache_ttl
+        setattr(func, "schema", _build_schema(func))
+        setattr(func, "tool_name", func.__name__)
+        setattr(func, "_tool_timeout_secs", timeout_secs)
+        setattr(func, "_tool_max_retries", max_retries)
+        setattr(func, "_tool_cache_ttl", cache_ttl)
         return func
 
     if fn is None:

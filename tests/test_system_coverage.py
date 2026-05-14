@@ -297,7 +297,7 @@ class TestResponseModelExtraction:
         # Two JSON objects: the rightmost one has the correct schema
         text = 'First {"result": "wrong"}. Second {"result": "correct"}.'
         validated = route._extract_json(text, Output)
-        assert validated.result == "correct"
+        assert validated.result == "correct"  # pyright: ignore[reportAttributeAccessIssue]
 
     def test_falls_back_to_start_if_rightmost_fails(self) -> None:
         from pydantic import BaseModel

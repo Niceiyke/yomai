@@ -25,7 +25,7 @@ from yomai.tools.registry import ToolFunction, get_schemas_for_openai
 class MistralProvider(LLMProvider):
     def __init__(self, config: LLMConfig) -> None:
         try:
-            from mistralai import Mistral
+            from mistralai import Mistral  # type: ignore[import-not-found]
         except ImportError as exc:
             raise YomaiLLMError(
                 "Mistral AI SDK is not installed.",

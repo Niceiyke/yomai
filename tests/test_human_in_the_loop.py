@@ -19,7 +19,7 @@ async def _start_workflow_and_get_interrupt(
     task = asyncio.create_task(client.post(path, json=body, headers={"X-Session-Id": sid}))
     deadline = asyncio.get_running_loop().time() + max_wait
     while asyncio.get_running_loop().time() < deadline:
-        interrupts = list(app._interrupt_store._interrupts.values())
+        interrupts = list(app._interrupt_store._interrupts.values())  # pyright: ignore[reportAttributeAccessIssue]
         pending = [i for i in interrupts if i.status == "pending"]
         if pending:
             return pending[0].id

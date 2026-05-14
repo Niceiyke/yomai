@@ -53,7 +53,7 @@ def _make_agent_tool(
         if len(call_stack_list) >= max_depth:
             raise MaxDepthExceeded(f"Max agent call depth ({max_depth}) exceeded: {' → '.join(call_stack_list)}")
 
-        app: Yomai = getattr(agent_fn, "_yomai_app", None)
+        app: Yomai | None = getattr(agent_fn, "_yomai_app", None)
         if app is None:
             return f"Agent {agent_name!r} is not attached to a Yomai app. Make sure it is decorated with @app.agent."
 
@@ -127,7 +127,7 @@ def _make_agent_tool(
         agent_as_tool.__doc__ += f"\n\nAdditional parameters:\n{params_desc}"
 
     # Attach schema for tool registration
-    agent_as_tool.schema = {
+    setattr(agent_as_tool, "schema", {
         "description": agent_as_tool.__doc__ or "",
         "properties": {
             "message": {
@@ -143,9 +143,9 @@ def _make_agent_tool(
             },
         },
         "required": ["message"],
-    }
-    agent_as_tool.tool_name = tool_name
-    agent_as_tool._yomai_app = getattr(agent_fn, "_yomai_app", None)
+    })
+    setattr(agent_as_tool, "tool_name", tool_name)
+    setattr(agent_as_tool, "_yomai_app", getattr(agent_fn, "_yomai_app", None))
 
     return agent_as_tool
 

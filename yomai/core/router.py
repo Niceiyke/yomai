@@ -10,7 +10,7 @@ import re
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable
-from typing import Any, Union, get_type_hints
+from typing import Any, TypeVar, Union, get_type_hints
 from uuid import UUID
 
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -167,6 +167,9 @@ SSE_HEADERS: dict[str, str] = {
 ProviderFactory = Callable[[], LLMProvider]
 
 
+T_Model = TypeVar("T_Model", bound=BaseModel)
+
+
 class AgentRoute(BaseRoute):
     def __init__(
         self,
@@ -268,8 +271,9 @@ class AgentRoute(BaseRoute):
                         user_message = str(handler_result["message"])
 
                 # Guardrails: strip prompt injection patterns
-                for pattern in self.guardrails:
-                    user_message = pattern.sub("[filtered]", user_message)
+                if isinstance(user_message, str):
+                    for pattern in self.guardrails:
+                        user_message = pattern.sub("[filtered]", user_message)
 
                 history = await self.memory.load(session_id)  # type: ignore[union-attr]
                 agent_loop = AgentLoop(
@@ -369,7 +373,7 @@ class AgentRoute(BaseRoute):
 
         return StreamingResponse(generate(), media_type="text/event-stream", headers=headers)
 
-    def _extract_json(self, text: str, model: type[BaseModel]) -> BaseModel:
+    def _extract_json(self, text: str, model: type[T_Model]) -> T_Model:
         """Try to extract a JSON object from LLM output and validate against the model.
 
         Strategy (in order):
@@ -402,7 +406,7 @@ class AgentRoute(BaseRoute):
     def _build_kwargs(
         self,
         body: dict[str, Any],
-        message: str,
+        message: str | list[dict[str, Any]],
         session_id: str,
         path_kwargs: dict[str, Any],
         request: Request | None = None,
@@ -830,7 +834,18 @@ class AgentWSRoute(AgentRoute):
         memory: MemoryBackend,
         provider_factory: ProviderFactory,
         heartbeat_secs: int = 15,
-        **kwargs: Any,
+        on_stream_start: LifecycleCallback | None = None,
+        on_stream_end: LifecycleCallback | None = None,
+        should_accept: AcceptCallback | None = None,
+        log_usage: bool = True,
+        system: str = "",
+        required_api_key: str = "",
+        path_params: set[str] | None = None,
+        cors: dict[str, Any] | None = None,
+        dependencies: list[Any] | None = None,
+        auth: AuthBackend | None = None,
+        response_model: type[BaseModel] | None = None,
+        guardrails: list[str] | None = None,
     ) -> None:
         super().__init__(
             path=path,
@@ -841,7 +856,18 @@ class AgentWSRoute(AgentRoute):
             memory=memory,
             provider_factory=provider_factory,
             heartbeat_secs=heartbeat_secs,
-            **kwargs,
+            on_stream_start=on_stream_start,
+            on_stream_end=on_stream_end,
+            should_accept=should_accept,
+            log_usage=log_usage,
+            system=system,
+            required_api_key=required_api_key,
+            path_params=path_params,
+            cors=cors,
+            dependencies=dependencies,
+            auth=auth,
+            response_model=response_model,
+            guardrails=guardrails,
         )
 
     async def handle(self, request: Request) -> StreamingResponse | JSONResponse:
@@ -895,6 +921,8 @@ class AgentWSRoute(AgentRoute):
                 if not message:
                     continue
 
+                if self.memory is None:
+                    continue
                 history = await self.memory.load(session_id)
                 agent_loop = AgentLoop(
                     self.provider_factory(),
@@ -935,10 +963,13 @@ class AgentWSRoute(AgentRoute):
                     if ev_type == "chunk":
                         await websocket.send_text(ws_chunk(str(parsed.get("content", ""))))
                     elif ev_type == "tool_start":
+                        tool_args: dict[str, Any] = parsed.get("args", {})  # type: ignore[assignment]
+                        if not isinstance(tool_args, dict):
+                            tool_args = {}
                         await websocket.send_text(
                             ws_tool_start(
                                 str(parsed.get("name", "")),
-                                dict(parsed.get("args", {})),
+                                tool_args,
                                 str(parsed.get("id", "")),
                             )
                         )
@@ -968,6 +999,9 @@ class AgentWSRoute(AgentRoute):
                     elif ev_type == "graph":
                         action = parsed.get("action", "")
                         if action == "upsert":
+                            graph_meta: dict[str, Any] | None = parsed.get("meta")  # type: ignore[assignment]
+                            if not isinstance(graph_meta, dict):
+                                graph_meta = None
                             await websocket.send_text(
                                 ws_graph_upsert(
                                     str(parsed.get("id", "")),
@@ -975,7 +1009,7 @@ class AgentWSRoute(AgentRoute):
                                     str(parsed.get("kind", "")),
                                     str(parsed.get("status", "running")),
                                     parent=parsed.get("parent"),
-                                    meta=parsed.get("meta"),
+                                    meta=graph_meta,
                                 )
                             )
                         elif action == "edge":
@@ -987,11 +1021,14 @@ class AgentWSRoute(AgentRoute):
                                 )
                             )
                         elif action == "update":
+                            update_meta: dict[str, Any] | None = parsed.get("meta")  # type: ignore[assignment]
+                            if not isinstance(update_meta, dict):
+                                update_meta = None
                             await websocket.send_text(
                                 ws_graph_update(
                                     str(parsed.get("id", "")),
                                     str(parsed.get("status", "")),
-                                    meta=parsed.get("meta"),
+                                    meta=update_meta,
                                 )
                             )
                     elif ev_type == "error":
@@ -1003,7 +1040,8 @@ class AgentWSRoute(AgentRoute):
                         )
 
                 await websocket.send_text(ws_done())
-                await self.memory.save(session_id, message, agent_loop.last_reply or "")
+                if self.memory is not None:
+                    await self.memory.save(session_id, message, agent_loop.last_reply or "")
 
         except WebSocketDisconnect:
             pass

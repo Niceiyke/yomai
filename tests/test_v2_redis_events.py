@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
 import pytest
 
@@ -60,6 +61,7 @@ async def test_redis_job_event_store_subscribe_reads_after_id() -> None:
     await store.append("job1", "chunk", {"type": "chunk", "content": "one"})
     await store.append("job1", "chunk", {"type": "chunk", "content": "two"})
 
+    event: Any = None
     async for event in store.subscribe("job1", "1-0", heartbeat_secs=0.01):
         assert event is not None
         break

@@ -92,7 +92,7 @@ def _capture_type_locals(fn: Callable[..., Any]) -> None:
     if caller_frame is not None:
         method_frame = caller_frame.f_back.f_back if caller_frame.f_back else None
         if method_frame is not None:
-            fn._yomai_type_locals = dict(method_frame.f_locals)
+            setattr(fn, "_yomai_type_locals", dict(method_frame.f_locals))
 
 
 class Depends:
@@ -453,7 +453,7 @@ class Yomai:
             # Redis check
             if self.config.queue.backend == "swiftq" or self.config.memory.backend == "redis":
                 try:
-                    import redis.asyncio as redis_lib
+                    import redis.asyncio as redis_lib  # type: ignore[import-not-found]
 
                     r = redis_lib.from_url(self.config.queue.url or "redis://localhost:6379/0")
                     await r.ping()  # type: ignore[reportGeneralTypeIssues]
@@ -955,19 +955,19 @@ class Yomai:
                 response_model=response_model,
                 guardrails=guardrails or [],
             )
-            route._budget_tracker = self.budget
-            route._hooks = self.hooks
-            route._tool_cache = self._tool_cache
-            route._stream_tasks = self._stream_tasks
-            route._stream_tasks_lock = self._stream_tasks_lock
+            setattr(route, "_budget_tracker", self.budget)
+            setattr(route, "_hooks", self.hooks)
+            setattr(route, "_tool_cache", self._tool_cache)
+            setattr(route, "_stream_tasks", self._stream_tasks)
+            setattr(route, "_stream_tasks_lock", self._stream_tasks_lock)
             if transport == "ws":
-                self._starlette.router.routes.append(WebSocketRoute(path, route.handle_ws))
+                self._starlette.router.routes.append(WebSocketRoute(path, getattr(route, "handle_ws")))
             else:
                 self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
-            tool_schemas = [t.schema for t in (tools or []) if isinstance(getattr(t, "schema", None), dict)]
+            tool_schemas = [getattr(t, "schema", None) for t in (tools or []) if isinstance(getattr(t, "schema", None), dict)]
             params = self._route_params(fn, injected={"session_id", "request"}, path_params=path_params)
             body_params = [p["name"] for p in params if p["name"] not in path_params]
             self._routes_meta.append(
@@ -988,11 +988,11 @@ class Yomai:
                     "cors": cors,
                 }
             )
-            fn._yomai_app = self
-            fn._yomai_path = path
-            fn._yomai_tools = tools or []
-            fn._yomai_agent_config = self.config.agent
-            fn._yomai_agent_system = resolved_system
+            setattr(fn, "_yomai_app", self)
+            setattr(fn, "_yomai_path", path)
+            setattr(fn, "_yomai_tools", tools or [])
+            setattr(fn, "_yomai_agent_config", self.config.agent)
+            setattr(fn, "_yomai_agent_system", resolved_system)
 
             agent_key = path.strip("/").replace("/", "_") or fn.__name__
             self.agents_registry.register(agent_key, fn)
@@ -1155,8 +1155,8 @@ class Yomai:
                         "cors": cors,
                     }
                 )
-                fn._yomai_app = self
-                fn._is_workflow = True
+                setattr(fn, "_yomai_app", self)
+                setattr(fn, "_is_workflow", True)
                 return fn
 
             route = WorkflowRoute(
@@ -1174,9 +1174,9 @@ class Yomai:
                 dependencies or [],
                 auth=self._auth,
             )
-            route._hooks = self.hooks
-            route._stream_tasks = self._stream_tasks
-            route._stream_tasks_lock = self._stream_tasks_lock
+            setattr(route, "_hooks", self.hooks)
+            setattr(route, "_stream_tasks", self._stream_tasks)
+            setattr(route, "_stream_tasks_lock", self._stream_tasks_lock)
             self._starlette.router.routes.append(Route(path, route.handle, methods=["POST"]))
             self._paths.add(path)
             body_params = self._route_params(fn, injected={"runner", "request"}, path_params=path_params)
@@ -1196,8 +1196,8 @@ class Yomai:
                     "cors": cors,
                 }
             )
-            fn._yomai_app = self
-            fn._is_workflow = True
+            setattr(fn, "_yomai_app", self)
+            setattr(fn, "_is_workflow", True)
             return fn
 
         return decorator
