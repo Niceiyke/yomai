@@ -127,23 +127,27 @@ def _make_agent_tool(
         agent_as_tool.__doc__ += f"\n\nAdditional parameters:\n{params_desc}"
 
     # Attach schema for tool registration
-    setattr(agent_as_tool, "schema", {
-        "description": agent_as_tool.__doc__ or "",
-        "properties": {
-            "message": {
-                "type": "string",
-                "description": "The message/prompt to send to the agent",
-            },
-            **{
-                p.name: {
+    setattr(
+        agent_as_tool,
+        "schema",
+        {
+            "description": agent_as_tool.__doc__ or "",
+            "properties": {
+                "message": {
                     "type": "string",
-                    "description": f"Parameter: {p.name}",
-                }
-                for p in extra_params
+                    "description": "The message/prompt to send to the agent",
+                },
+                **{
+                    p.name: {
+                        "type": "string",
+                        "description": f"Parameter: {p.name}",
+                    }
+                    for p in extra_params
+                },
             },
+            "required": ["message"],
         },
-        "required": ["message"],
-    })
+    )
     setattr(agent_as_tool, "tool_name", tool_name)
     setattr(agent_as_tool, "_yomai_app", getattr(agent_fn, "_yomai_app", None))
 

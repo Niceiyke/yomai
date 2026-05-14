@@ -459,13 +459,17 @@ class WorkflowRunner:
             return await self.interrupt(question)
 
         # Build a tool schema so the LLM knows about it
-        setattr(request_human_input, "schema", {
-            "name": "request_human_input",
-            "description": "Ask a human for input or approval.",
-            "type": "object",
-            "properties": {"question": {"type": "string", "description": "The question to ask the human"}},
-            "required": ["question"],
-        })
+        setattr(
+            request_human_input,
+            "schema",
+            {
+                "name": "request_human_input",
+                "description": "Ask a human for input or approval.",
+                "type": "object",
+                "properties": {"question": {"type": "string", "description": "The question to ask the human"}},
+                "required": ["question"],
+            },
+        )
         setattr(request_human_input, "tool_name", "request_human_input")
         setattr(request_human_input, "_tool_timeout_secs", None)
         setattr(request_human_input, "_tool_max_retries", 0)

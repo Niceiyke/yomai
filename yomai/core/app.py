@@ -967,7 +967,9 @@ class Yomai:
             self._paths.add(path)
             self._paths.add(path)
             tool_names = [getattr(t, "tool_name", getattr(t, "__name__", str(t))) for t in (tools or [])]
-            tool_schemas = [getattr(t, "schema", None) for t in (tools or []) if isinstance(getattr(t, "schema", None), dict)]
+            tool_schemas = [
+                getattr(t, "schema", None) for t in (tools or []) if isinstance(getattr(t, "schema", None), dict)
+            ]
             params = self._route_params(fn, injected={"session_id", "request"}, path_params=path_params)
             body_params = [p["name"] for p in params if p["name"] not in path_params]
             self._routes_meta.append(

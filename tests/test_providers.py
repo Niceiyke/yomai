@@ -998,12 +998,16 @@ class _MockAnthropicMessageUsage:
 def _simple_tool_fn():
     fn = lambda x: x  # noqa: E731
     fn.__name__ = "search"
-    setattr(fn, "schema", {
-        "name": "search",
-        "description": "Search the web",
-        "properties": {"query": {"type": "string"}},
-        "required": ["query"],
-    })
+    setattr(
+        fn,
+        "schema",
+        {
+            "name": "search",
+            "description": "Search the web",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    )
     setattr(fn, "tool_name", "search")
     return fn
 
